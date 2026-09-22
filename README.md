@@ -15,11 +15,7 @@
 
 ## Docker 部署
 
-生产环境使用 `docker run` 启动，服务端口固定为 `1000`。镜像地址：
-
-```text
-crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
-```
+生产环境在服务器上从源码构建镜像，再使用 `docker run` 启动；不需要登录或拉取项目作者的镜像仓库。服务端口固定为 `1000`。
 
 启动前必须准备以下文件，宿主机文件带 `.txt`，挂载到容器后的密钥文件名不带 `.txt`：
 
@@ -31,10 +27,11 @@ crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-
 /opt/openai-auth-workbench/secrets/sub2api_admin_key.txt
 ```
 
-拉取并启动：
+在项目目录构建并启动：
 
 ```bash
-docker pull crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+cd /opt/openai-auth-workbench
+docker build -t openai-auth-workbench:1.0.0 .
 docker run -d \
   --name openai-auth-workbench \
   --restart unless-stopped \
@@ -47,7 +44,7 @@ docker run -d \
   -v /opt/openai-auth-workbench/secrets/app_master_key.txt:/run/secrets/app_master_key:ro \
   -v /opt/openai-auth-workbench/secrets/app_session_secret.txt:/run/secrets/app_session_secret:ro \
   -v /opt/openai-auth-workbench/secrets/sub2api_admin_key.txt:/run/secrets/sub2api_admin_key:ro \
-  crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+  openai-auth-workbench:1.0.0
 ```
 
 浏览器访问 `http://服务器IP:1000`，默认用户名为 `admin`。SQLite 数据保存在宿主机 `/opt/openai-auth-workbench/data`，删除或更新容器不会丢失账号数据。

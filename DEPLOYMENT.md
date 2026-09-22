@@ -7,13 +7,7 @@
 - Linux 服务器和 Docker Engine。
 - 已运行且可被工作台容器访问的 Sub2API。
 - 服务器的 `1000` 端口可用。
-- 如镜像仓库要求认证，需要阿里云容器镜像服务账号。
-
-镜像地址：
-
-```text
-crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
-```
+- 能够访问 GitHub、Docker Hub 和系统软件源，以便获取源码和构建基础镜像。
 
 ## 2. 获取项目并准备目录
 
@@ -93,14 +87,14 @@ base_url: "https://sub2api.example.com/api/v1"
 
 配置中的 `session_idle_minutes: 0` 和 `session_absolute_hours: 0` 表示管理员登录会话不自动过期。公网部署建议通过防火墙限制访问范围，并在反向代理启用 HTTPS。
 
-## 5. 登录镜像仓库并拉取镜像
+## 5. 从源码构建镜像
 
 ```bash
-docker login crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com --username 15632327388
-docker pull crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+cd /opt/openai-auth-workbench
+docker build -t openai-auth-workbench:1.0.0 .
 ```
 
-密码由 `docker login` 交互输入，不要写入脚本或本文档。
+该命令只使用当前仓库源码构建本地镜像，不需要登录或拉取项目作者的私有镜像仓库。
 
 ## 6. 使用 `docker run` 启动
 
@@ -117,7 +111,7 @@ docker run -d \
   -v /opt/openai-auth-workbench/secrets/app_master_key.txt:/run/secrets/app_master_key:ro \
   -v /opt/openai-auth-workbench/secrets/app_session_secret.txt:/run/secrets/app_session_secret:ro \
   -v /opt/openai-auth-workbench/secrets/sub2api_admin_key.txt:/run/secrets/sub2api_admin_key:ro \
-  crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+  openai-auth-workbench:1.0.0
 ```
 
 `--add-host` 用于让容器访问宿主机上的 Sub2API。即使当前使用远程 HTTPS 地址，保留此参数也不会影响运行。
@@ -155,10 +149,12 @@ cd /opt/openai-auth-workbench
 sudo tar -czf "/root/openai-auth-workbench-$(date +%Y%m%d-%H%M%S).tar.gz" data config.yaml secrets
 ```
 
-拉取相同标签的最新镜像并重建容器：
+拉取最新源码、重新构建本地镜像并重建容器：
 
 ```bash
-docker pull crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+cd /opt/openai-auth-workbench
+sudo git pull --ff-only
+docker build -t openai-auth-workbench:1.0.0 .
 docker rm -f openai-auth-workbench 2>/dev/null || true
 ```
 
@@ -229,7 +225,7 @@ sudo ss -lntp | grep ':1000'
 docker logs -f --tail=200 openai-auth-workbench
 ```
 
-## 11. 本地构建和手动推送镜像
+## 11. 构建前验证源码
 
 在项目根目录执行：
 
@@ -238,8 +234,7 @@ pnpm install
 pnpm test
 pnpm typecheck
 pnpm build
-docker build -t crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0 .
-docker push crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+docker build -t openai-auth-workbench:1.0.0 .
 ```
 
 Docker 镜像不会包含 `secrets/*.txt` 或 `data` 目录中的运行数据。
