@@ -27,7 +27,40 @@ sudo git pull --ff-only
 
 ## 3. 创建四个密钥文件
 
-交互输入工作台密码和 Sub2API 管理员密钥，避免把明文写入命令历史：
+每个 `.txt` 文件只保存一个值。不要写变量名、不要加引号，也不要把四个值写到同一个文件中。
+
+目录结构：
+
+```text
+/opt/openai-auth-workbench/secrets/
+├── workbench_admin_password.txt
+├── app_master_key.txt
+├── app_session_secret.txt
+└── sub2api_admin_key.txt
+```
+
+`workbench_admin_password.txt` 的内容是自己设置的工作台登录密码，例如：
+
+```text
+MyStrongWorkbenchPassword_2026!
+```
+
+`sub2api_admin_key.txt` 的内容是从 Sub2API 后台取得的真实管理员密钥，例如：
+
+```text
+your-real-sub2api-admin-key
+```
+
+`app_master_key.txt` 和 `app_session_secret.txt` 不需要手工填写，使用下方的 `openssl` 命令随机生成。
+
+以下写法都是错误的，因为文件中包含了变量名或引号：
+
+```text
+WORKBENCH_ADMIN_PASSWORD=MyStrongWorkbenchPassword_2026!
+"MyStrongWorkbenchPassword_2026!"
+```
+
+推荐使用下面的命令创建，命令会保证文件中没有多余换行。工作台密码和 Sub2API 管理员密钥采用交互输入，避免把明文写入命令历史：
 
 ```bash
 cd /opt/openai-auth-workbench
@@ -44,6 +77,15 @@ openssl rand -base64 32 | tr -d '\n' | sudo tee secrets/app_master_key.txt >/dev
 openssl rand -base64 48 | tr -d '\n' | sudo tee secrets/app_session_secret.txt >/dev/null
 ```
 
+创建完成后可检查文件是否存在以及长度，不要使用 `cat` 在终端显示生产密钥：
+
+```bash
+ls -l secrets/*.txt
+wc -c secrets/*.txt
+```
+
+其中 `app_master_key.txt` 通常为 44 字节，`app_session_secret.txt` 通常为 64 字节；另外两个文件的长度取决于实际密码和管理员密钥。
+
 设置目录和文件权限：
 
 ```bash
@@ -52,7 +94,16 @@ sudo chmod 700 data secrets
 sudo chmod 400 config.yaml secrets/*.txt
 ```
 
-`app_master_key.txt` 用于解密账号密码和 2FA 密钥。生产环境投入使用后不要重新生成，必须单独安全备份。
+四个文件的作用：
+
+| 文件 | 内容 | 用途 |
+| --- | --- | --- |
+| `workbench_admin_password.txt` | 自己设置的工作台登录密码 | 使用 `admin` 登录管理页面 |
+| `sub2api_admin_key.txt` | Sub2API 后台已有的管理员密钥 | 调用 Sub2API 管理接口 |
+| `app_master_key.txt` | 随机生成的 Base64 主密钥 | 加密和解密账号密码、2FA 密钥 |
+| `app_session_secret.txt` | 随机生成的 Base64 会话密钥 | 保护管理员登录会话 |
+
+`app_master_key.txt` 在生产环境投入使用后不要重新生成，必须单独安全备份；否则已有账号密码和 2FA 密钥将无法解密。
 
 ## 4. 检查 `config.yaml`
 

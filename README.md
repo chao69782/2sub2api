@@ -27,6 +27,8 @@
 /opt/openai-auth-workbench/secrets/sub2api_admin_key.txt
 ```
 
+每个 `.txt` 文件只写一个值，不写 `变量名=`，也不加引号。具体内容示例和安全生成命令见 [完整启动与部署文档](./DEPLOYMENT.md#3-创建四个密钥文件)。
+
 在项目目录构建并启动：
 
 ```bash
