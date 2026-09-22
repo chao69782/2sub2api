@@ -1,0 +1,43 @@
+server:
+  host: "0.0.0.0"
+  port: 1000
+  trust_proxy: false
+  cookie_secure: false
+
+auth:
+  username: "admin"
+  password_file: "/run/secrets/workbench_admin_password"
+  session_idle_minutes: 0
+  session_absolute_hours: 0
+  max_failed_attempts: 5
+  lockout_minutes: 15
+
+security:
+  master_key_file: "/run/secrets/app_master_key"
+  session_secret_file: "/run/secrets/app_session_secret"
+
+sub2api:
+  base_url: "https://ebondai.com/api/v1"
+  admin_key_file: "/run/secrets/sub2api_admin_key"
+  request_timeout_seconds: 30
+
+scheduler:
+  check_interval_minutes: 5
+
+import_defaults:
+  model_whitelist:
+    - "codex-auto-review"
+    - "gpt-5.5"
+    - "gpt-5.6-luna"
+    - "gpt-5.6-sol"
+    - "gpt-5.6-terra"
+    - "gpt-6-astra"
+  model_mapping:
+    "gpt-5.3-codex-spark": "gpt-5.6-luna"
+  concurrency: 3
+  priority: 50
+  group_ids: []
+  load_factor: null
+  auto_pause_on_expired: true
+  proxy_policy: "auto"
+  fixed_proxy_id: null
