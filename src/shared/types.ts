@@ -33,6 +33,8 @@ export interface ImportDefaults {
   fixedProxyId: number | null
 }
 
+export type AccountImportOverrides = Omit<ImportDefaults, 'modelMapping'>
+
 export interface SchedulerSettings {
   checkIntervalMinutes: number
 }
@@ -67,6 +69,7 @@ export interface ManagedAccount {
   autoReauthorizationCount: number
   usageFiveHourPercent: number | null
   usageSevenDayPercent: number | null
+  importOverrides: AccountImportOverrides | null
   importProfileVersion: number
   createdAt: string
   updatedAt: string

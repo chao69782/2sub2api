@@ -1,4 +1,4 @@
-import type { ManagedAccount, RuntimeSettings } from '../shared/types'
+import type { AccountImportOverrides, ManagedAccount, RuntimeSettings } from '../shared/types'
 
 let csrfToken = ''
 
@@ -34,7 +34,9 @@ export const api = {
   importAccounts(text: string) { return request<{ created: ManagedAccount[]; errors: Array<{ line: number; message: string }> }>('/api/accounts/import', { method: 'POST', body: JSON.stringify({ text }) }) },
   updateAccount(id: string, body: Record<string, unknown>) { return request<ManagedAccount>(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) }) },
   deleteAccount(id: string, deleteRemote: boolean) { return request(`/api/accounts/${id}?deleteRemote=${deleteRemote}`, { method: 'DELETE' }) },
-  autoAuthorize(id: string, accountName: string) { return request(`/api/accounts/${id}/authorize/auto`, { method: 'POST', body: JSON.stringify({ accountName }) }) },
+  autoAuthorize(id: string, accountName: string, importOverrides: AccountImportOverrides | null) {
+    return request(`/api/accounts/${id}/authorize/auto`, { method: 'POST', body: JSON.stringify({ accountName, importOverrides }) })
+  },
   refreshAccount(id: string) { return request(`/api/accounts/${id}/refresh`, { method: 'POST' }) },
   getSettings() { return request<{ value: RuntimeSettings; version: number }>('/api/settings') },
   saveSettings(value: RuntimeSettings) { return request<{ value: RuntimeSettings; version: number }>('/api/settings', { method: 'PUT', body: JSON.stringify(value) }) },

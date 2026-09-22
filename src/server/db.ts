@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS managed_accounts (
   next_check_at TEXT,
   last_error_code TEXT,
   last_error_summary TEXT,
+  import_overrides_json TEXT,
   import_profile_version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -154,6 +155,9 @@ export function openDatabase(dataDir: string): Database.Database {
   )
   if (!accountColumns.has('desired_remote_name')) {
     db.exec('ALTER TABLE managed_accounts ADD COLUMN desired_remote_name TEXT')
+  }
+  if (!accountColumns.has('import_overrides_json')) {
+    db.exec('ALTER TABLE managed_accounts ADD COLUMN import_overrides_json TEXT')
   }
   const purgeLegacySoftDeletes = db.transaction(() => {
     const rows = db.prepare(`

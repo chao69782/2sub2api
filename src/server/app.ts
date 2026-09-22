@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
-import type { RuntimeSettings } from '../shared/types.js'
+import type { AccountImportOverrides, ImportDefaults, RuntimeSettings } from '../shared/types.js'
 import { AuthService } from './auth.js'
 import type { AppConfig } from './config.js'
 import { configRuntimeSettings } from './config.js'
@@ -21,9 +21,9 @@ const schedulerSchema = z.object({
 })
 const TOKEN_REFRESH_WINDOW_MINUTES = 15
 const REAUTH_FAILURE_COOLDOWN_HOURS = 6
-const importDefaultsSchema = z.object({
-  modelWhitelist: z.array(z.string().trim().min(1).max(200).refine((value) => !value.includes('*'), '模型白名单只允许填写准确的模型 ID')),
-  modelMapping: z.record(z.string().min(1), z.string().min(1)),
+const modelWhitelistSchema = z.array(z.string().trim().min(1).max(200).refine((value) => !value.includes('*'), '模型白名单只允许填写准确的模型 ID'))
+const importProfileShape = {
+  modelWhitelist: modelWhitelistSchema,
   concurrency: z.number().int().min(0).max(1000),
   priority: z.number().int().min(0).max(100000),
   groupIds: z.array(z.number().int().positive()),
@@ -31,14 +31,23 @@ const importDefaultsSchema = z.object({
   autoPauseOnExpired: z.boolean(),
   proxyPolicy: z.enum(['auto', 'direct', 'fixed']),
   fixedProxyId: z.number().int().positive().nullable()
-}).superRefine((value, ctx) => {
+} as const
+const validateImportProfile = (
+  value: { modelWhitelist: string[]; proxyPolicy: 'auto' | 'direct' | 'fixed'; fixedProxyId: number | null },
+  ctx: z.RefinementCtx
+) => {
   if (new Set(value.modelWhitelist).size !== value.modelWhitelist.length) {
     ctx.addIssue({ code: 'custom', path: ['modelWhitelist'], message: '模型白名单中存在重复 ID' })
   }
   if (value.proxyPolicy === 'fixed' && !value.fixedProxyId) {
     ctx.addIssue({ code: 'custom', message: 'fixedProxyId is required for fixed proxy policy' })
   }
-})
+}
+const accountImportOverridesSchema = z.object(importProfileShape).superRefine(validateImportProfile)
+const importDefaultsSchema = z.object({
+  ...importProfileShape,
+  modelMapping: z.record(z.string().min(1), z.string().min(1)),
+}).superRefine(validateImportProfile)
 const runtimeSettingsSchema = z.object({
   scheduler: schedulerSchema,
   importDefaults: importDefaultsSchema
@@ -46,6 +55,10 @@ const runtimeSettingsSchema = z.object({
 
 export function buildModelRestrictionMapping(modelWhitelist: string[], explicitMapping: Record<string, string>): Record<string, string> {
   return Object.assign(Object.fromEntries(modelWhitelist.map((modelId) => [modelId, modelId])), explicitMapping)
+}
+
+export function resolveAccountImportDefaults(globalDefaults: ImportDefaults, overrides: AccountImportOverrides | null): ImportDefaults {
+  return overrides ? { ...globalDefaults, ...overrides, modelMapping: globalDefaults.modelMapping } : globalDefaults
 }
 
 export function buildSub2apiCredentialsUpdate(
@@ -92,6 +105,15 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
   const sub2api = new Sub2APIClient(config)
   const authDriver = new OpenAIAuthDriver()
 
+  const validateImportTarget = async (profile: AccountImportOverrides | ImportDefaults) => {
+    if (profile.groupIds.length) {
+      const groups = await sub2api.listGroups()
+      const validGroupIds = new Set(groups.filter((group) => group.platform === 'openai').map((group) => group.id))
+      if (profile.groupIds.some((groupId) => !validGroupIds.has(groupId))) throw new Error('包含无效的 OpenAI 分组 ID')
+    }
+    if (profile.proxyPolicy === 'fixed') await sub2api.selectProxy('fixed', profile.fixedProxyId)
+  }
+
   const audit = (request: FastifyRequest, action: string, result: string, accountId?: string, details: Record<string, unknown> = {}) => {
     db.prepare(`INSERT INTO audit_events(id, actor, action, account_id, result, details_json, source_ip, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(crypto.randomUUID(), request.authUser?.username ?? 'system', action, accountId ?? null, result, JSON.stringify(redactAuditDetails(details)), sourceIp(request), new Date().toISOString())
@@ -104,8 +126,8 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
   const beginOAuth = async (accountId: string) => {
     const account = accounts.get(accountId)
     if (!account) throw new Error('ACCOUNT_NOT_FOUND')
-    const currentSettings = settings.get()
-    const proxy = await sub2api.selectProxy(currentSettings.value.importDefaults.proxyPolicy, currentSettings.value.importDefaults.fixedProxyId)
+    const defaults = resolveAccountImportDefaults(settings.get().value.importDefaults, account.importOverrides)
+    const proxy = await sub2api.selectProxy(defaults.proxyPolicy, defaults.fixedProxyId)
     const generated = await sub2api.generateOpenAIAuthUrl(null)
     const state = new URL(generated.auth_url).searchParams.get('state')
     if (!state) throw new Error('Sub2API 授权 URL 缺少 state')
@@ -130,7 +152,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     const oauth = accounts.getOAuthSession(accountId, state)
     const account = accounts.get(accountId)
     if (!oauth || !account) throw new Error('OAUTH_SESSION_INVALID')
-    const defaults = settings.get().value.importDefaults
+    const defaults = resolveAccountImportDefaults(settings.get().value.importDefaults, account.importOverrides)
     const proxyId = typeof oauth.proxy_id === 'number' ? oauth.proxy_id : null
     let remote: Sub2APIAccount
     if (account.sub2apiAccountId) {
@@ -301,10 +323,12 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
     const body = z.object({
       email: z.string().email().optional(), password: z.string().min(1).optional(),
-      totpSecret: z.string().optional(), notes: z.string().max(5000).optional()
+      totpSecret: z.string().optional(), notes: z.string().max(5000).optional(),
+      importOverrides: accountImportOverridesSchema.nullable().optional()
     }).parse(request.body)
     const totpSecret = body.totpSecret ? normalizeTotpSecret(body.totpSecret) : undefined
     if (body.totpSecret && !totpSecret) throw new Error('2FA 密钥格式无效')
+    if (body.importOverrides) await validateImportTarget(body.importOverrides)
     const account = accounts.update(params.id, { ...body, ...(totpSecret ? { totpSecret } : {}) })
     audit(request, 'account.update', 'success', params.id)
     return account
@@ -324,12 +348,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
   app.get('/api/settings', async () => settings.get())
   app.put('/api/settings', async (request) => {
     const value = runtimeSettingsSchema.parse(request.body) as RuntimeSettings
-    const groups = await sub2api.listGroups()
-    const validGroupIds = new Set(groups.filter((group) => group.platform === 'openai').map((group) => group.id))
-    if (value.importDefaults.groupIds.some((groupId) => !validGroupIds.has(groupId))) throw new Error('包含无效的 OpenAI 分组 ID')
-    if (value.importDefaults.proxyPolicy === 'fixed') {
-      await sub2api.selectProxy('fixed', value.importDefaults.fixedProxyId)
-    }
+    await validateImportTarget(value.importDefaults)
     const saved = settings.save(value)
     audit(request, 'settings.update', 'success', undefined, { version: saved.version })
     return saved
@@ -357,14 +376,19 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
 
   app.post('/api/accounts/:id/authorize/auto', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
-    const body = z.object({ accountName: z.string().trim().min(1).max(200) }).parse(request.body)
+    const body = z.object({
+      accountName: z.string().trim().min(1).max(200),
+      importOverrides: accountImportOverridesSchema.nullable().optional()
+    }).parse(request.body)
     const account = accounts.get(params.id)
     if (!account) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
     accounts.getSecrets(params.id)
+    if (body.importOverrides) await validateImportTarget(body.importOverrides)
+    if (body.importOverrides !== undefined) accounts.update(params.id, { importOverrides: body.importOverrides })
     accounts.setDesiredRemoteName(params.id, body.accountName)
     const job = jobs.enqueue({ accountId: params.id, type: 'authorize', payload: { accountName: body.accountName, automatic: false }, maxAttempts: 2 })
     accounts.setOAuthPending(params.id, account.selectedProxyId)
-    audit(request, 'oauth.auto.queued', 'success', params.id, { jobId: job.id })
+    audit(request, 'oauth.auto.queued', 'success', params.id, { jobId: job.id, accountImportOverrides: Boolean(body.importOverrides) })
     return reply.code(202).send({ job })
   })
 

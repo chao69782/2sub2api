@@ -42,6 +42,19 @@ describe('AccountRepository', () => {
     })
   })
 
+  it('persists and clears account-specific Sub2API import settings', () => {
+    const { db } = testDatabase()
+    const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 5)))
+    const account = repository.create({ email: 'custom@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    const importOverrides = {
+      modelWhitelist: ['gpt-5.6-luna'], concurrency: 7, priority: 88, groupIds: [2, 3],
+      loadFactor: 4, autoPauseOnExpired: false, proxyPolicy: 'direct' as const, fixedProxyId: null
+    }
+
+    expect(repository.update(account.id, { importOverrides }).importOverrides).toEqual(importOverrides)
+    expect(repository.update(account.id, { importOverrides: null }).importOverrides).toBeNull()
+  })
+
   it('migrates legacy authorization policies to managed login', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-policy-'))
     let db = openDatabase(directory)

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AppConfig } from './config.js'
 import { openDatabase, type WorkbenchDatabase } from './db.js'
-import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate } from './app.js'
+import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate, resolveAccountImportDefaults } from './app.js'
 
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -61,6 +61,22 @@ describe('model restrictions', () => {
       model_mapping: { 'gpt-5.4': 'gpt-5.4' }
     })
   })
+
+  it('uses account import settings while retaining the global model mapping', () => {
+    const globalDefaults = {
+      modelWhitelist: ['gpt-5.6-sol'], modelMapping: { alias: 'gpt-5.6-sol' }, concurrency: 3, priority: 50,
+      groupIds: [1], loadFactor: null, autoPauseOnExpired: true, proxyPolicy: 'auto' as const, fixedProxyId: null
+    }
+    const overrides = {
+      modelWhitelist: ['gpt-5.6-luna'], concurrency: 8, priority: 90, groupIds: [], loadFactor: 2,
+      autoPauseOnExpired: false, proxyPolicy: 'direct' as const, fixedProxyId: null
+    }
+    expect(resolveAccountImportDefaults(globalDefaults, overrides)).toEqual({
+      ...overrides,
+      modelMapping: { alias: 'gpt-5.6-sol' }
+    })
+    expect(resolveAccountImportDefaults(globalDefaults, null)).toBe(globalDefaults)
+  })
 })
 
 describe('administrator session protection', () => {
@@ -101,12 +117,17 @@ describe('administrator session protection', () => {
     const imported = await app.inject({ method: 'POST', url: '/api/accounts/import', headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { text: 'a@example.com--password--JBSWY3DPEHPK3PXP' } })
     expect(imported.statusCode).toBe(201)
     const accountId = imported.json().created[0].id as string
-    const queued = await app.inject({ method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { accountName: 'Primary OpenAI' } })
+    const importOverrides = {
+      modelWhitelist: ['gpt-5.6-luna'], concurrency: 6, priority: 70, groupIds: [], loadFactor: null,
+      autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null
+    }
+    const queued = await app.inject({ method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { accountName: 'Primary OpenAI', importOverrides } })
     expect(queued.statusCode).toBe(202)
     expect(queued.json().job.payload).toEqual({ accountName: 'Primary OpenAI', automatic: false })
     expect(db.prepare('SELECT auth_status FROM managed_accounts WHERE id = ?').get(accountId)).toEqual({ auth_status: 'authorizing' })
     const listed = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
     expect(listed.statusCode).toBe(200)
     expect(listed.json().items[0].sub2apiAccountName).toBe('Primary OpenAI')
+    expect(listed.json().items[0].importOverrides).toEqual(importOverrides)
   })
 })

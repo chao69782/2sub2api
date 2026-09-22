@@ -150,9 +150,70 @@
       </form>
     </ModalDialog>
 
-    <ModalDialog v-model:open="authOpen" title="自动授权" width="max-w-lg">
-      <form class="space-y-4" @submit.prevent="queueAuthorization">
+    <ModalDialog v-model:open="authOpen" title="自动授权" width="max-w-4xl">
+      <form class="space-y-5" @submit.prevent="queueAuthorization">
         <div><label class="label" for="sub2apiAccountName">Sub2API 账号名称</label><input id="sub2apiAccountName" v-model="authSub2apiName" class="input" maxlength="200" required /></div>
+
+        <fieldset class="rounded-md border border-slate-200 p-4">
+          <legend class="px-1 text-sm font-medium text-slate-800">账号导入配置</legend>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors" :class="authUseGlobal ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'">
+              <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="true" />
+              <span><span class="block text-sm font-medium text-slate-800">使用全局配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">跟随设置页中的导入模板和模型白名单</span></span>
+            </label>
+            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors" :class="!authUseGlobal ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'">
+              <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="false" />
+              <span><span class="block text-sm font-medium text-slate-800">使用账号专属配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">保存到该账号，后续自动重授权继续使用</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div v-if="!authUseGlobal" class="space-y-4">
+          <section class="rounded-md border border-slate-200">
+            <header class="border-b border-slate-200 bg-slate-50 px-4 py-3"><h3 class="text-sm font-semibold text-slate-800">Sub2API 导入模板</h3></header>
+            <div class="space-y-4 p-4">
+              <div class="grid gap-4 sm:grid-cols-3">
+                <NumberField v-model="authOverrides.concurrency" label="并发数量" :min="0" :max="1000" />
+                <NumberField v-model="authOverrides.priority" label="优先级" :min="0" :max="100000" />
+                <NullableNumberField v-model="authOverrides.loadFactor" label="负载系数" :min="1" :max="10000" />
+              </div>
+              <label class="flex min-h-10 cursor-pointer items-center gap-3 text-sm"><input v-model="authOverrides.autoPauseOnExpired" type="checkbox" class="h-4 w-4 accent-emerald-700" />账号过期后自动暂停</label>
+              <div class="grid gap-5 lg:grid-cols-2">
+                <fieldset>
+                  <legend class="label">OpenAI 分组</legend>
+                  <div class="max-h-36 overflow-auto rounded-md border border-slate-200 p-2">
+                    <label v-for="group in groups" :key="group.id" class="flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-sm hover:bg-slate-50">
+                      <input v-model="authOverrides.groupIds" type="checkbox" :value="group.id" class="h-4 w-4 accent-emerald-700" />
+                      <span>{{ group.name }}</span><span class="ml-auto text-xs text-slate-400">ID {{ group.id }}</span>
+                    </label>
+                    <div v-if="!groups.length" class="px-2 py-3 text-sm text-slate-500">没有可用分组</div>
+                  </div>
+                </fieldset>
+                <fieldset>
+                  <legend class="label">代理分配</legend>
+                  <div class="flex flex-wrap gap-4 text-sm">
+                    <label class="flex cursor-pointer items-center gap-2"><input v-model="authOverrides.proxyPolicy" type="radio" name="accountProxyPolicy" value="auto" />自动选择</label>
+                    <label class="flex cursor-pointer items-center gap-2"><input v-model="authOverrides.proxyPolicy" type="radio" name="accountProxyPolicy" value="direct" />不使用代理</label>
+                    <label class="flex cursor-pointer items-center gap-2"><input v-model="authOverrides.proxyPolicy" type="radio" name="accountProxyPolicy" value="fixed" />固定代理</label>
+                  </div>
+                  <select v-if="authOverrides.proxyPolicy === 'fixed'" v-model.number="authOverrides.fixedProxyId" class="input mt-3" aria-label="固定代理">
+                    <option :value="null">选择代理</option>
+                    <option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">{{ proxy.name }} · {{ proxy.account_count || 0 }} 个账号</option>
+                  </select>
+                  <p v-else-if="authOverrides.proxyPolicy === 'auto'" class="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">按账号数最少、延迟最低自动选择；没有可用代理时使用直连。</p>
+                </fieldset>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-md border border-slate-200 p-4">
+            <label class="label" for="accountModelWhitelist">模型白名单</label>
+            <textarea id="accountModelWhitelist" v-model="authModelWhitelistText" class="textarea min-h-32 font-mono" spellcheck="false" placeholder="每行一个模型 ID，例如：&#10;gpt-5.6-luna&#10;gpt-5.6-sol"></textarea>
+            <p class="mt-2 text-xs leading-5 text-slate-500">仅覆盖该账号的模型白名单；模型映射继续使用设置页中的全局配置。</p>
+          </section>
+        </div>
+
+        <div v-if="authError" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ authError }}</div>
         <div class="flex justify-end gap-2"><button type="button" class="button" @click="authOpen = false">取消</button><button class="button button-primary" :disabled="!authSub2apiName.trim() || authorizing"><LoaderCircle v-if="authorizing" :size="17" class="animate-spin" /><Bot v-else :size="17" />开始自动授权</button></div>
       </form>
     </ModalDialog>
@@ -162,9 +223,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Bot, Download, LoaderCircle, Pencil, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
-import type { ManagedAccount } from '../../shared/types'
+import type { AccountImportOverrides, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
 import ModalDialog from '../components/ModalDialog.vue'
+import NullableNumberField from '../components/NullableNumberField.vue'
+import NumberField from '../components/NumberField.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const accounts = ref<ManagedAccount[]>([])
@@ -186,6 +249,16 @@ const editForm = ref({ email: '', notes: '', password: '', totpSecret: '' })
 const authOpen = ref(false)
 const authAccountId = ref('')
 const authSub2apiName = ref('')
+const authError = ref('')
+const authUseGlobal = ref(true)
+const authModelWhitelistText = ref('')
+const globalSettings = ref<RuntimeSettings | null>(null)
+const groups = ref<Array<{ id: number; name: string }>>([])
+const proxies = ref<Array<{ id: number; name: string; account_count?: number; latency_ms?: number }>>([])
+const authOverrides = ref<AccountImportOverrides>({
+  modelWhitelist: [], concurrency: 3, priority: 50, groupIds: [], loadFactor: null,
+  autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null
+})
 let searchTimer: number | undefined
 let statusPollTimer: number | undefined
 const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void pollStatuses() }
@@ -227,6 +300,13 @@ function authorizationResult(account: ManagedAccount) {
 function setResult(text: string, isError = false) { error.value = isError ? text : ''; message.value = isError ? '' : text }
 function toggleAll(event: Event) { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? accounts.value.map((account) => account.id) : [] }
 async function load() { loading.value = true; try { accounts.value = (await api.listAccounts(search.value)).items; selectedIds.value = selectedIds.value.filter((id) => accounts.value.some((account) => account.id === id)) } catch (e) { setResult(e instanceof Error ? e.message : '加载失败', true) } finally { loading.value = false } }
+async function loadAuthorizationMetadata() {
+  const configuration = await api.getSettings()
+  globalSettings.value = configuration.value
+  const [groupResult, proxyResult] = await Promise.allSettled([api.listGroups(), api.listProxies()])
+  if (groupResult.status === 'fulfilled') groups.value = groupResult.value.items
+  if (proxyResult.status === 'fulfilled') proxies.value = proxyResult.value.items
+}
 async function pollStatuses() { try { accounts.value = (await api.listAccounts(search.value)).items } catch { /* Keep the current list during transient polling failures. */ } }
 function debouncedLoad() { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
 function openImport() { credentialText.value = ''; previewRows.value = []; importOpen.value = true }
@@ -235,10 +315,62 @@ async function submitImport() { importing.value = true; try { const result = awa
 function edit(account: ManagedAccount) { editingId.value = account.id; editForm.value = { email: account.email, notes: account.notes, password: '', totpSecret: '' }; editOpen.value = true }
 async function saveEdit() { try { const body = { ...editForm.value }; if (!body.password) delete (body as Partial<typeof body>).password; if (!body.totpSecret) delete (body as Partial<typeof body>).totpSecret; await api.updateAccount(editingId.value, body); editOpen.value = false; setResult('账号已更新'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '保存失败', true) } }
 async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
-function openAuthorization(account: ManagedAccount) { authAccountId.value = account.id; authSub2apiName.value = account.sub2apiAccountName || account.email; authOpen.value = true }
-async function queueAuthorization() { authorizing.value = true; try { await api.autoAuthorize(authAccountId.value, authSub2apiName.value.trim()); authOpen.value = false; setResult('自动授权任务已开始'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '自动授权启动失败', true) } finally { authorizing.value = false } }
+function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
+  return {
+    modelWhitelist: [...defaults.modelWhitelist], concurrency: defaults.concurrency, priority: defaults.priority,
+    groupIds: [...defaults.groupIds], loadFactor: defaults.loadFactor, autoPauseOnExpired: defaults.autoPauseOnExpired,
+    proxyPolicy: defaults.proxyPolicy, fixedProxyId: defaults.fixedProxyId
+  }
+}
+function cloneOverrides(overrides: AccountImportOverrides): AccountImportOverrides {
+  return { ...overrides, modelWhitelist: [...overrides.modelWhitelist], groupIds: [...overrides.groupIds] }
+}
+async function openAuthorization(account: ManagedAccount) {
+  try {
+    // Refresh on every open so changes made on the settings page and transient
+    // metadata failures do not leave this form with stale options.
+    await loadAuthorizationMetadata()
+    const defaults = globalSettings.value?.importDefaults
+    if (!defaults) throw new Error('无法读取全局导入配置')
+    const selected = account.importOverrides ? cloneOverrides(account.importOverrides) : overridesFromDefaults(defaults)
+    authAccountId.value = account.id
+    authSub2apiName.value = account.sub2apiAccountName || account.email
+    authUseGlobal.value = !account.importOverrides
+    authOverrides.value = selected
+    authModelWhitelistText.value = selected.modelWhitelist.join('\n')
+    authError.value = ''
+    authOpen.value = true
+  } catch (e) {
+    setResult(e instanceof Error ? e.message : '授权配置加载失败', true)
+  }
+}
+function buildAuthorizationOverrides(): AccountImportOverrides | null {
+  if (authUseGlobal.value) return null
+  const modelWhitelist = authModelWhitelistText.value.split(/[\r\n,]+/).map((modelId) => modelId.trim()).filter(Boolean)
+  if (new Set(modelWhitelist).size !== modelWhitelist.length) throw new Error('模型白名单中存在重复 ID')
+  if (modelWhitelist.some((modelId) => modelId.includes('*'))) throw new Error('模型白名单只允许填写准确的模型 ID')
+  if (authOverrides.value.proxyPolicy === 'fixed' && !authOverrides.value.fixedProxyId) throw new Error('请选择固定代理')
+  return {
+    ...authOverrides.value,
+    modelWhitelist,
+    groupIds: [...authOverrides.value.groupIds],
+    fixedProxyId: authOverrides.value.proxyPolicy === 'fixed' ? authOverrides.value.fixedProxyId : null
+  }
+}
+async function queueAuthorization() {
+  authorizing.value = true
+  authError.value = ''
+  try {
+    const importOverrides = buildAuthorizationOverrides()
+    await api.autoAuthorize(authAccountId.value, authSub2apiName.value.trim(), importOverrides)
+    authOpen.value = false
+    setResult(importOverrides ? '自动授权任务已开始，已保存账号专属配置' : '自动授权任务已开始，使用全局配置')
+    await load()
+  } catch (e) { authError.value = e instanceof Error ? e.message : '自动授权启动失败' } finally { authorizing.value = false }
+}
 onMounted(() => {
   void load()
+  void loadAuthorizationMetadata().catch(() => { /* Retry when the authorization dialog opens. */ })
   statusPollTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') void pollStatuses()
   }, 5_000)

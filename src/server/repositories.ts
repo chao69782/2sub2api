@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import type { AuthorizationJobStatus, ManagedAccount, RuntimeSettings } from '../shared/types.js'
+import type { AccountImportOverrides, AuthorizationJobStatus, ManagedAccount, RuntimeSettings } from '../shared/types.js'
 import type { WorkbenchDatabase } from './db.js'
 import { SecretCipher } from './crypto.js'
 
@@ -25,6 +25,7 @@ interface AccountRow {
   next_check_at: string | null
   last_error_code: string | null
   last_error_summary: string | null
+  import_overrides_json: string | null
   authorization_job_status: AuthorizationJobStatus | null
   authorization_error_code: string | null
   authorization_error_summary: string | null
@@ -39,7 +40,12 @@ interface AccountRow {
 
 function mapAccount(row: AccountRow): ManagedAccount {
   let usage: { five_hour?: { utilization?: number }; seven_day?: { utilization?: number } } = {}
+  let importOverrides: AccountImportOverrides | null = null
   try { usage = JSON.parse(row.last_snapshot_json || '{}') as typeof usage } catch { /* ignore malformed snapshots */ }
+  try {
+    const parsed = row.import_overrides_json ? JSON.parse(row.import_overrides_json) as unknown : null
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) importOverrides = parsed as AccountImportOverrides
+  } catch { /* ignore malformed per-account settings */ }
   return {
     id: row.id,
     email: row.email_display,
@@ -65,6 +71,7 @@ function mapAccount(row: AccountRow): ManagedAccount {
     autoReauthorizationCount: Number(row.auto_reauthorization_count ?? 0),
     usageFiveHourPercent: typeof usage.five_hour?.utilization === 'number' ? usage.five_hour.utilization : null,
     usageSevenDayPercent: typeof usage.seven_day?.utilization === 'number' ? usage.seven_day.utilization : null,
+    importOverrides,
     importProfileVersion: row.import_profile_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -143,7 +150,7 @@ export class AccountRepository {
     return this.get(accountId)!
   }
 
-  update(accountId: string, input: { email?: string; password?: string; totpSecret?: string; notes?: string }): ManagedAccount {
+  update(accountId: string, input: { email?: string; password?: string; totpSecret?: string; notes?: string; importOverrides?: AccountImportOverrides | null }): ManagedAccount {
     const current = this.db.prepare('SELECT * FROM managed_accounts WHERE id = ? AND deleted_at IS NULL').get(accountId) as Record<string, unknown> | undefined
     if (!current) throw new Error('ACCOUNT_NOT_FOUND')
     const updates: string[] = []
@@ -153,6 +160,10 @@ export class AccountRepository {
       values.push(input.email.trim().toLowerCase(), input.email.trim())
     }
     if (input.notes !== undefined) { updates.push('notes = ?'); values.push(input.notes) }
+    if (input.importOverrides !== undefined) {
+      updates.push('import_overrides_json = ?')
+      values.push(input.importOverrides === null ? null : JSON.stringify(input.importOverrides))
+    }
     if (input.password) {
       const secretId = String(current.password_secret_id ?? '')
       if (secretId) this.updateSecret(secretId, input.password)
