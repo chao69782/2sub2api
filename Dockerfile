@@ -27,7 +27,7 @@ COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node sentinel ./sentinel
-COPY --chown=node:node config.yaml /app/config/config.yaml
+COPY --chown=node:node config.docker.example.yaml /app/config/config.yaml
 
 RUN mkdir -p /app/data \
   && chown node:node /app/data \

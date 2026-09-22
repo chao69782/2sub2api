@@ -24,4 +24,4 @@ if (-not (Test-Path -LiteralPath $ConfigTarget)) {
   Copy-Item -LiteralPath (Join-Path $ProjectRoot 'config.docker.example.yaml') -Destination $ConfigTarget
 }
 
-Write-Host '配置和密钥文件已创建。请检查 config.yaml 中的 Sub2API 地址后运行 docker compose up -d --build。'
+Write-Host '配置和密钥文件已创建。请检查 config.yaml 中的 Sub2API 地址，然后按照 DEPLOYMENT.md 使用 docker run 启动。'

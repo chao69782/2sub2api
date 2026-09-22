@@ -15,34 +15,44 @@
 
 ## Docker 部署
 
-要求 Docker Desktop 或 Docker Engine，且 Sub2API 已启动并可从容器访问。
+生产环境使用 `docker run` 启动，服务端口固定为 `1000`。镜像地址：
 
-```powershell
-cd D:\桌面\openai-auth-workbench
-.\scripts\init-secrets.ps1 -AdminPassword '工作台登录密码' -Sub2APIAdminKey 'Sub2API管理员密钥'
+```text
+crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
 ```
 
-检查 `config.yaml`：默认 Sub2API 地址为 `http://host.docker.internal:8080/api/v1`。若 Sub2API 端口不同，请按实际端口修改。
+启动前必须准备以下文件，宿主机文件带 `.txt`，挂载到容器后的密钥文件名不带 `.txt`：
 
-```powershell
-docker compose up -d --build
-docker compose ps
-docker compose logs -f workbench
+```text
+/opt/openai-auth-workbench/config.yaml
+/opt/openai-auth-workbench/secrets/workbench_admin_password.txt
+/opt/openai-auth-workbench/secrets/app_master_key.txt
+/opt/openai-auth-workbench/secrets/app_session_secret.txt
+/opt/openai-auth-workbench/secrets/sub2api_admin_key.txt
 ```
 
-浏览器访问 `http://localhost:1000`，用户名默认为 `admin`，密码为初始化脚本传入的值。SQLite 数据保存在 `./data/workbench.db`。
+拉取并启动：
 
-更新代码后重新构建：
-
-```powershell
-docker compose up -d --build
+```bash
+docker pull crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
+docker run -d \
+  --name openai-auth-workbench \
+  --restart unless-stopped \
+  -p 1000:1000 \
+  --shm-size=1g \
+  --add-host host.docker.internal:host-gateway \
+  -v /opt/openai-auth-workbench/config.yaml:/app/config/config.yaml:ro \
+  -v /opt/openai-auth-workbench/data:/app/data \
+  -v /opt/openai-auth-workbench/secrets/workbench_admin_password.txt:/run/secrets/workbench_admin_password:ro \
+  -v /opt/openai-auth-workbench/secrets/app_master_key.txt:/run/secrets/app_master_key:ro \
+  -v /opt/openai-auth-workbench/secrets/app_session_secret.txt:/run/secrets/app_session_secret:ro \
+  -v /opt/openai-auth-workbench/secrets/sub2api_admin_key.txt:/run/secrets/sub2api_admin_key:ro \
+  crpi-no16jw5ywcx0jgxw.cn-beijing.personal.cr.aliyuncs.com/zhang1998/openai-auth-workbench:1.0.0
 ```
 
-停止服务但保留数据：
+浏览器访问 `http://服务器IP:1000`，默认用户名为 `admin`。SQLite 数据保存在宿主机 `/opt/openai-auth-workbench/data`，删除或更新容器不会丢失账号数据。
 
-```powershell
-docker compose down
-```
+首次部署、密钥生成、更新和故障排查参见 [完整启动与部署文档](./DEPLOYMENT.md)。
 
 ## 配置说明
 

@@ -7,8 +7,8 @@ server:
 auth:
   username: "admin"
   password_file: "/run/secrets/workbench_admin_password"
-  session_idle_minutes: 30
-  session_absolute_hours: 12
+  session_idle_minutes: 0
+  session_absolute_hours: 0
   max_failed_attempts: 5
   lockout_minutes: 15
 
