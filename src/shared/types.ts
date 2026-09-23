@@ -44,6 +44,18 @@ export interface RuntimeSettings {
   importDefaults: ImportDefaults
 }
 
+export interface UsageWindowSummary {
+  averagePercent: number | null
+  queriedCount: number
+}
+
+export interface AccountUsageSummary {
+  accountCount: number
+  eligibleAccountCount: number
+  fiveHour: UsageWindowSummary
+  sevenDay: UsageWindowSummary
+}
+
 export interface ManagedAccount {
   id: string
   email: string

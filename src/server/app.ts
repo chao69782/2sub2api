@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
-import type { AccountImportOverrides, ImportDefaults, RuntimeSettings } from '../shared/types.js'
+import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings, UsageWindowSummary } from '../shared/types.js'
 import { AuthService } from './auth.js'
 import type { AppConfig } from './config.js'
 import { configRuntimeSettings } from './config.js'
@@ -86,6 +86,32 @@ function sourceIp(request: FastifyRequest): string {
 function redactAuditDetails(value: Record<string, unknown>): Record<string, unknown> {
   const blocked = new Set(['password', 'totpSecret', 'access_token', 'refresh_token', 'id_token', 'adminKey'])
   return Object.fromEntries(Object.entries(value).filter(([key]) => !blocked.has(key)))
+}
+
+function summarizeUsageWindow(accounts: ManagedAccount[], field: 'usageFiveHourPercent' | 'usageSevenDayPercent'): UsageWindowSummary {
+  let total = 0
+  let queriedCount = 0
+  for (const account of accounts) {
+    const value = account[field]
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    total += value
+    queriedCount += 1
+  }
+  return { averagePercent: queriedCount ? total / queriedCount : null, queriedCount }
+}
+
+function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary {
+  const eligibleAccounts = accounts.filter((account) => {
+    const knownValues = [account.usageFiveHourPercent, account.usageSevenDayPercent]
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    return knownValues.length > 0 && knownValues.every((value) => value < 100)
+  })
+  return {
+    accountCount: accounts.length,
+    eligibleAccountCount: eligibleAccounts.length,
+    fiveHour: summarizeUsageWindow(eligibleAccounts, 'usageFiveHourPercent'),
+    sevenDay: summarizeUsageWindow(eligibleAccounts, 'usageSevenDayPercent')
+  }
 }
 
 export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promise<FastifyInstance> {
@@ -260,7 +286,11 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
 
   app.get('/api/accounts', async (request) => {
     const query = z.object({ search: z.string().optional() }).parse(request.query)
-    return { items: accounts.list(query.search ?? '') }
+    const allAccounts = accounts.list()
+    return {
+      items: query.search?.trim() ? accounts.list(query.search) : allAccounts,
+      usageSummary: summarizeAccountUsage(allAccounts)
+    }
   })
 
   app.get('/api/accounts/export.txt', async (_request, reply) => {

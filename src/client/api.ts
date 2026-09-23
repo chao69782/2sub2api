@@ -1,4 +1,4 @@
-import type { AccountImportOverrides, ManagedAccount, RuntimeSettings } from '../shared/types'
+import type { AccountImportOverrides, AccountUsageSummary, ManagedAccount, RuntimeSettings } from '../shared/types'
 
 let csrfToken = ''
 
@@ -28,7 +28,7 @@ export const api = {
   },
   me() { return request<{ user: { username: string }; csrfToken: string }>('/api/auth/me') },
   logout() { return request('/api/auth/logout', { method: 'POST' }) },
-  listAccounts(search = '') { return request<{ items: ManagedAccount[] }>(`/api/accounts?search=${encodeURIComponent(search)}`) },
+  listAccounts(search = '') { return request<{ items: ManagedAccount[]; usageSummary: AccountUsageSummary }>(`/api/accounts?search=${encodeURIComponent(search)}`) },
   exportAccounts(ids: string[]) { window.location.assign(`/api/accounts/export.txt?ids=${encodeURIComponent(ids.join(','))}`) },
   previewImport(text: string) { return request<{ rows: Array<Record<string, unknown>>; validCount: number }>('/api/accounts/import/preview', { method: 'POST', body: JSON.stringify({ text }) }) },
   importAccounts(text: string) { return request<{ created: ManagedAccount[]; errors: Array<{ line: number; message: string }> }>('/api/accounts/import', { method: 'POST', body: JSON.stringify({ text }) }) },
