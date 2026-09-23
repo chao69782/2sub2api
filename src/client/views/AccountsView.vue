@@ -295,7 +295,7 @@ const availabilityRateLabel = computed(() => {
   const estimate = availability.value
   if (!estimate || estimate.status === 'insufficient_data' || estimate.consumptionRatePercentPerHour === null) return '暂时无法计算消耗速度'
   if (estimate.consumptionRatePercentPerHour === 0) return `当前未检测到消耗 · 样本 ${estimate.sampleCount} 个账号`
-  return `平均每账号消耗 ${Number(estimate.consumptionRatePercentPerHour.toFixed(1))}%/小时 · 样本 ${estimate.sampleCount} 个账号`
+  return `平均消耗 ${Number(estimate.consumptionRatePercentPerHour.toFixed(1))}%/小时 · 样本 ${estimate.sampleCount} 个账号`
 })
 const selectedIds = ref<string[]>([])
 const allSelected = computed(() => accounts.value.length > 0 && accounts.value.every((account) => selectedIds.value.includes(account.id)))
@@ -321,6 +321,9 @@ const authModelWhitelistText = ref('')
 const globalSettings = ref<RuntimeSettings | null>(null)
 const groups = ref<Array<{ id: number; name: string }>>([])
 const proxies = ref<Array<{ id: number; name: string; account_count?: number; latency_ms?: number }>>([])
+let groupsMetadataLoaded = false
+let proxiesMetadataLoaded = false
+let authorizationMetadataRequest: Promise<void> | null = null
 const authOverrides = ref<AccountImportOverrides>({
   modelWhitelist: [], concurrency: 3, priority: 50, groupIds: [], loadFactor: null,
   autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null
@@ -378,11 +381,36 @@ function setResult(text: string, isError = false) { error.value = isError ? text
 function toggleAll(event: Event) { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? accounts.value.map((account) => account.id) : [] }
 async function load() { loading.value = true; try { const response = await api.listAccounts(search.value); accounts.value = response.items; usageSummary.value = response.usageSummary; selectedIds.value = selectedIds.value.filter((id) => accounts.value.some((account) => account.id === id)) } catch (e) { setResult(e instanceof Error ? e.message : '加载失败', true) } finally { loading.value = false } }
 async function loadAuthorizationMetadata() {
-  const configuration = await api.getSettings()
-  globalSettings.value = configuration.value
-  const [groupResult, proxyResult] = await Promise.allSettled([api.listGroups(), api.listProxies()])
-  if (groupResult.status === 'fulfilled') groups.value = groupResult.value.items
-  if (proxyResult.status === 'fulfilled') proxies.value = proxyResult.value.items
+  if (globalSettings.value && groupsMetadataLoaded && proxiesMetadataLoaded) return
+  if (authorizationMetadataRequest) return authorizationMetadataRequest
+
+  authorizationMetadataRequest = (async () => {
+    let settingsError: unknown
+    const requests: Array<Promise<void>> = []
+    if (!globalSettings.value) {
+      requests.push(api.getSettings()
+        .then((configuration) => { globalSettings.value = configuration.value })
+        .catch((cause) => { settingsError = cause }))
+    }
+    if (!groupsMetadataLoaded) {
+      requests.push(api.listGroups()
+        .then((response) => { groups.value = response.items; groupsMetadataLoaded = true })
+        .catch(() => { /* Retry only this resource on the next dialog open. */ }))
+    }
+    if (!proxiesMetadataLoaded) {
+      requests.push(api.listProxies()
+        .then((response) => { proxies.value = response.items; proxiesMetadataLoaded = true })
+        .catch(() => { /* Retry only this resource on the next dialog open. */ }))
+    }
+    await Promise.all(requests)
+    if (!globalSettings.value) throw settingsError ?? new Error('无法读取全局导入配置')
+  })()
+
+  try {
+    await authorizationMetadataRequest
+  } finally {
+    authorizationMetadataRequest = null
+  }
 }
 async function pollStatuses() { try { const response = await api.listAccounts(search.value); accounts.value = response.items; usageSummary.value = response.usageSummary } catch { /* Keep the current list during transient polling failures. */ } }
 function debouncedLoad() { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
@@ -404,8 +432,7 @@ function cloneOverrides(overrides: AccountImportOverrides): AccountImportOverrid
 }
 async function openAuthorization(account: ManagedAccount) {
   try {
-    // Refresh on every open so changes made on the settings page and transient
-    // metadata failures do not leave this form with stale options.
+    // The page preload and all dialog opens share one cached metadata request.
     await loadAuthorizationMetadata()
     const defaults = globalSettings.value?.importDefaults
     if (!defaults) throw new Error('无法读取全局导入配置')

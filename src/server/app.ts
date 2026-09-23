@@ -93,7 +93,7 @@ function summarizeUsageWindow(accounts: ManagedAccount[], field: 'usageFiveHourP
   let queriedCount = 0
   for (const account of accounts) {
     const value = account[field]
-    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value >= 100) continue
     total += value
     queriedCount += 1
   }
@@ -141,6 +141,9 @@ function estimateWindowAvailability(
     status: exhaustsBeforeReset ? 'exhausts_before_reset' : 'sustainable_until_reset',
     remainingSeconds: Math.max(0, Math.round(exhaustsBeforeReset ? secondsUntilExhaustion : earliestResetSeconds)),
     limitingWindow: definition.kind,
+    // Normalize the summed percentage-point rate against the sampled account
+    // pool. This is the percentage of total pooled capacity consumed per hour,
+    // so adding an equally utilized account does not inflate the displayed rate.
     consumptionRatePercentPerHour: Number(((consumptionRatePerSecond * 60 * 60) / sampleCount).toFixed(2)),
     sampleCount
   }
@@ -166,7 +169,9 @@ function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary 
   const eligibleAccounts = accounts.filter((account) => {
     const knownValues = [account.usageFiveHourPercent, account.usageSevenDayPercent]
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    return knownValues.length > 0 && knownValues.every((value) => value < 100)
+    return account.healthStatus !== 'rate_limited' &&
+      knownValues.length > 0 &&
+      knownValues.every((value) => value >= 0 && value < 100)
   })
   return {
     accountCount: accounts.length,

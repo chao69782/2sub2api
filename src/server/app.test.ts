@@ -156,6 +156,23 @@ describe('account usage summary', () => {
       status: 'sustainable_until_reset', remainingSeconds: 9_000, limitingWindow: 'five_hour',
       consumptionRatePercentPerHour: 0, sampleCount: 1
     })
+    expect(estimateAccountUsageAvailability([
+      account({
+        usageFiveHourPercent: 10,
+        usageFiveHourRemainingSeconds: 9_000,
+        usageSevenDayPercent: null,
+        usageSevenDayRemainingSeconds: null
+      }),
+      account({
+        usageFiveHourPercent: 10,
+        usageFiveHourRemainingSeconds: 9_000,
+        usageSevenDayPercent: null,
+        usageSevenDayRemainingSeconds: null
+      })
+    ])).toEqual({
+      status: 'sustainable_until_reset', remainingSeconds: 9_000, limitingWindow: 'five_hour',
+      consumptionRatePercentPerHour: 4, sampleCount: 2
+    })
     expect(estimateAccountUsageAvailability([account({
       usageFiveHourPercent: 40,
       usageFiveHourRemainingSeconds: null,
