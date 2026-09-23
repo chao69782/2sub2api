@@ -27,7 +27,7 @@
         </div>
         <span v-if="usageSummary" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
       </div>
-      <div v-if="usageSummary" class="grid gap-3 sm:grid-cols-2">
+      <div v-if="usageSummary" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <div v-for="window in usageWindows" :key="window.label" class="rounded-md border border-slate-200 bg-slate-50 p-4">
           <div class="flex items-start justify-between gap-3">
             <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
@@ -38,6 +38,15 @@
             <div class="h-2 rounded-full bg-emerald-600" :style="{ width: usageWidth(window.averagePercent) }" />
           </div>
           <p class="mt-3 text-xs text-slate-600">已查询 {{ window.queriedCount }}/{{ usageSummary.eligibleAccountCount }} 个</p>
+        </div>
+        <div class="rounded-md border p-4 sm:col-span-2 lg:col-span-1" :class="availabilityCardClass">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-2 text-sm font-medium text-slate-700"><Clock3 :size="17" aria-hidden="true" />预计剩余可用时间</div>
+            <span class="rounded-full bg-white/80 px-2 py-1 text-xs font-medium text-slate-700">{{ availabilityWindowLabel }}</span>
+          </div>
+          <p class="mt-3 text-2xl font-semibold tabular-nums text-slate-900">{{ availabilityPrimaryLabel }}</p>
+          <p class="mt-2 text-xs leading-5 text-slate-600">{{ availabilityDetail }}</p>
+          <p class="mt-3 border-t border-current/10 pt-3 text-xs font-medium text-slate-700">{{ availabilityRateLabel }}</p>
         </div>
       </div>
       <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
@@ -246,7 +255,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Bot, Download, LoaderCircle, Pencil, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
+import { Bot, Clock3, Download, LoaderCircle, Pencil, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
 import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
 import ModalDialog from '../components/ModalDialog.vue'
@@ -262,6 +271,31 @@ const usageWindows = computed(() => {
     { label: '5 小时窗口', ...summary.fiveHour },
     { label: '7 天窗口', ...summary.sevenDay }
   ] : []
+})
+const availability = computed(() => usageSummary.value?.availability ?? null)
+const availabilityWindowLabel = computed(() => availability.value?.limitingWindow === 'five_hour' ? '5 小时窗口' : availability.value?.limitingWindow === 'seven_day' ? '7 天窗口' : '等待数据')
+const availabilityCardClass = computed(() => availability.value?.status === 'exhausts_before_reset'
+  ? 'border-amber-200 bg-amber-50'
+  : availability.value?.status === 'sustainable_until_reset'
+    ? 'border-emerald-200 bg-emerald-50'
+    : 'border-slate-200 bg-slate-50')
+const availabilityPrimaryLabel = computed(() => {
+  const estimate = availability.value
+  if (!estimate || estimate.status === 'insufficient_data' || estimate.remainingSeconds === null) return '样本不足'
+  const duration = formatDuration(estimate.remainingSeconds)
+  return estimate.status === 'exhausts_before_reset' ? `约 ${duration}` : `至少 ${duration}`
+})
+const availabilityDetail = computed(() => {
+  const estimate = availability.value
+  if (!estimate || estimate.status === 'insufficient_data') return '等待用量窗口返回重置时间和足够的运行样本。'
+  if (estimate.status === 'exhausts_before_reset') return `${availabilityWindowLabel.value}按当前平均消耗速度预计会先达到 100%。`
+  return `${availabilityWindowLabel.value}将在此后重置，按当前平均速度不会提前耗尽。`
+})
+const availabilityRateLabel = computed(() => {
+  const estimate = availability.value
+  if (!estimate || estimate.status === 'insufficient_data' || estimate.consumptionRatePercentPerHour === null) return '暂时无法计算消耗速度'
+  if (estimate.consumptionRatePercentPerHour === 0) return `当前未检测到消耗 · 样本 ${estimate.sampleCount} 个账号`
+  return `平均每账号消耗 ${Number(estimate.consumptionRatePercentPerHour.toFixed(1))}%/小时 · 样本 ${estimate.sampleCount} 个账号`
 })
 const selectedIds = ref<string[]>([])
 const allSelected = computed(() => accounts.value.length > 0 && accounts.value.every((account) => selectedIds.value.includes(account.id)))
@@ -311,6 +345,16 @@ function shortError(value: string): string {
 function usageWidth(value: number | null): string { return `${Math.min(Math.max(value ?? 0, 0), 100)}%` }
 function usageLabel(value: number | null): string { return value === null ? '-' : `${Math.round(value)}%` }
 function averageUsageLabel(value: number | null): string { return value === null ? '-' : `${Number(value.toFixed(1))}%` }
+function formatDuration(value: number): string {
+  const totalMinutes = Math.max(0, Math.round(value / 60))
+  if (totalMinutes < 1) return '不足 1 分钟'
+  const days = Math.floor(totalMinutes / (24 * 60))
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
+  const minutes = totalMinutes % 60
+  if (days) return `${days} 天${hours ? ` ${hours} 小时` : ''}`
+  if (hours) return `${hours} 小时${minutes ? ` ${minutes} 分钟` : ''}`
+  return `${minutes} 分钟`
+}
 function displayHealthStatus(account: ManagedAccount): string {
   return Math.max(account.usageFiveHourPercent ?? 0, account.usageSevenDayPercent ?? 0) >= 100 ? 'rate_limited' : account.healthStatus
 }

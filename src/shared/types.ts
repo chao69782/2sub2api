@@ -49,11 +49,23 @@ export interface UsageWindowSummary {
   queriedCount: number
 }
 
+export type UsageAvailabilityStatus = 'exhausts_before_reset' | 'sustainable_until_reset' | 'insufficient_data'
+export type UsageWindowKind = 'five_hour' | 'seven_day'
+
+export interface UsageAvailabilityEstimate {
+  status: UsageAvailabilityStatus
+  remainingSeconds: number | null
+  limitingWindow: UsageWindowKind | null
+  consumptionRatePercentPerHour: number | null
+  sampleCount: number
+}
+
 export interface AccountUsageSummary {
   accountCount: number
   eligibleAccountCount: number
   fiveHour: UsageWindowSummary
   sevenDay: UsageWindowSummary
+  availability: UsageAvailabilityEstimate
 }
 
 export interface ManagedAccount {
@@ -81,6 +93,8 @@ export interface ManagedAccount {
   autoReauthorizationCount: number
   usageFiveHourPercent: number | null
   usageSevenDayPercent: number | null
+  usageFiveHourRemainingSeconds: number | null
+  usageSevenDayRemainingSeconds: number | null
   importOverrides: AccountImportOverrides | null
   importProfileVersion: number
   createdAt: string

@@ -38,8 +38,25 @@ interface AccountRow {
   updated_at: string
 }
 
+interface UsageWindowSnapshot {
+  utilization?: number
+  resets_at?: string | null
+  remaining_seconds?: number
+}
+
+function usageRemainingSeconds(window: UsageWindowSnapshot | null | undefined): number | null {
+  if (!window) return null
+  if (typeof window.resets_at === 'string' && window.resets_at.trim()) {
+    const resetAt = Date.parse(window.resets_at)
+    if (Number.isFinite(resetAt)) return Math.max(0, Math.round((resetAt - Date.now()) / 1000))
+  }
+  return typeof window.remaining_seconds === 'number' && Number.isFinite(window.remaining_seconds) && window.remaining_seconds > 0
+    ? Math.round(window.remaining_seconds)
+    : null
+}
+
 function mapAccount(row: AccountRow): ManagedAccount {
-  let usage: { five_hour?: { utilization?: number }; seven_day?: { utilization?: number } } = {}
+  let usage: { five_hour?: UsageWindowSnapshot | null; seven_day?: UsageWindowSnapshot | null } = {}
   let importOverrides: AccountImportOverrides | null = null
   try { usage = JSON.parse(row.last_snapshot_json || '{}') as typeof usage } catch { /* ignore malformed snapshots */ }
   try {
@@ -71,6 +88,8 @@ function mapAccount(row: AccountRow): ManagedAccount {
     autoReauthorizationCount: Number(row.auto_reauthorization_count ?? 0),
     usageFiveHourPercent: typeof usage.five_hour?.utilization === 'number' ? usage.five_hour.utilization : null,
     usageSevenDayPercent: typeof usage.seven_day?.utilization === 'number' ? usage.seven_day.utilization : null,
+    usageFiveHourRemainingSeconds: usageRemainingSeconds(usage.five_hour),
+    usageSevenDayRemainingSeconds: usageRemainingSeconds(usage.seven_day),
     importOverrides,
     importProfileVersion: row.import_profile_version,
     createdAt: row.created_at,

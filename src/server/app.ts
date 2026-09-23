@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
-import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings, UsageWindowSummary } from '../shared/types.js'
+import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings, UsageAvailabilityEstimate, UsageWindowKind, UsageWindowSummary } from '../shared/types.js'
 import { AuthService } from './auth.js'
 import type { AppConfig } from './config.js'
 import { configRuntimeSettings } from './config.js'
@@ -100,6 +100,68 @@ function summarizeUsageWindow(accounts: ManagedAccount[], field: 'usageFiveHourP
   return { averagePercent: queriedCount ? total / queriedCount : null, queriedCount }
 }
 
+const usageWindowDefinitions: Array<{
+  kind: UsageWindowKind
+  durationSeconds: number
+  percentField: 'usageFiveHourPercent' | 'usageSevenDayPercent'
+  remainingField: 'usageFiveHourRemainingSeconds' | 'usageSevenDayRemainingSeconds'
+}> = [
+  { kind: 'five_hour', durationSeconds: 5 * 60 * 60, percentField: 'usageFiveHourPercent', remainingField: 'usageFiveHourRemainingSeconds' },
+  { kind: 'seven_day', durationSeconds: 7 * 24 * 60 * 60, percentField: 'usageSevenDayPercent', remainingField: 'usageSevenDayRemainingSeconds' }
+]
+
+function estimateWindowAvailability(
+  accounts: ManagedAccount[],
+  definition: typeof usageWindowDefinitions[number]
+): UsageAvailabilityEstimate | null {
+  let remainingCapacity = 0
+  let consumptionRatePerSecond = 0
+  let earliestResetSeconds = Number.POSITIVE_INFINITY
+  let sampleCount = 0
+
+  for (const account of accounts) {
+    const utilization = account[definition.percentField]
+    const remainingSeconds = account[definition.remainingField]
+    if (
+      typeof utilization !== 'number' || !Number.isFinite(utilization) || utilization < 0 || utilization >= 100 ||
+      typeof remainingSeconds !== 'number' || !Number.isFinite(remainingSeconds) || remainingSeconds < 0 || remainingSeconds > definition.durationSeconds
+    ) continue
+    const elapsedSeconds = definition.durationSeconds - remainingSeconds
+    if (elapsedSeconds < 60) continue
+    remainingCapacity += 100 - utilization
+    consumptionRatePerSecond += utilization / elapsedSeconds
+    earliestResetSeconds = Math.min(earliestResetSeconds, remainingSeconds)
+    sampleCount += 1
+  }
+
+  if (!sampleCount || !Number.isFinite(earliestResetSeconds)) return null
+  const secondsUntilExhaustion = consumptionRatePerSecond > 0 ? remainingCapacity / consumptionRatePerSecond : Number.POSITIVE_INFINITY
+  const exhaustsBeforeReset = secondsUntilExhaustion < earliestResetSeconds
+  return {
+    status: exhaustsBeforeReset ? 'exhausts_before_reset' : 'sustainable_until_reset',
+    remainingSeconds: Math.max(0, Math.round(exhaustsBeforeReset ? secondsUntilExhaustion : earliestResetSeconds)),
+    limitingWindow: definition.kind,
+    consumptionRatePercentPerHour: Number(((consumptionRatePerSecond * 60 * 60) / sampleCount).toFixed(2)),
+    sampleCount
+  }
+}
+
+export function estimateAccountUsageAvailability(accounts: ManagedAccount[]): UsageAvailabilityEstimate {
+  const estimates = usageWindowDefinitions
+    .map((definition) => estimateWindowAvailability(accounts, definition))
+    .filter((estimate): estimate is UsageAvailabilityEstimate => estimate !== null)
+  const exhausting = estimates
+    .filter((estimate) => estimate.status === 'exhausts_before_reset')
+    .sort((left, right) => (left.remainingSeconds ?? Number.POSITIVE_INFINITY) - (right.remainingSeconds ?? Number.POSITIVE_INFINITY))[0]
+  if (exhausting) return exhausting
+  const sustainable = estimates
+    .sort((left, right) => (left.remainingSeconds ?? Number.POSITIVE_INFINITY) - (right.remainingSeconds ?? Number.POSITIVE_INFINITY))[0]
+  return sustainable ?? {
+    status: 'insufficient_data', remainingSeconds: null, limitingWindow: null,
+    consumptionRatePercentPerHour: null, sampleCount: 0
+  }
+}
+
 function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary {
   const eligibleAccounts = accounts.filter((account) => {
     const knownValues = [account.usageFiveHourPercent, account.usageSevenDayPercent]
@@ -110,7 +172,8 @@ function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary 
     accountCount: accounts.length,
     eligibleAccountCount: eligibleAccounts.length,
     fiveHour: summarizeUsageWindow(eligibleAccounts, 'usageFiveHourPercent'),
-    sevenDay: summarizeUsageWindow(eligibleAccounts, 'usageSevenDayPercent')
+    sevenDay: summarizeUsageWindow(eligibleAccounts, 'usageSevenDayPercent'),
+    availability: estimateAccountUsageAvailability(eligibleAccounts)
   }
 }
 

@@ -2,10 +2,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ManagedAccount } from '../shared/types.js'
 import type { AppConfig } from './config.js'
 import { SecretCipher } from './crypto.js'
 import { openDatabase, type WorkbenchDatabase } from './db.js'
-import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate, resolveAccountImportDefaults } from './app.js'
+import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate, estimateAccountUsageAvailability, resolveAccountImportDefaults } from './app.js'
 import { AccountRepository } from './repositories.js'
 
 const cleanup: Array<() => Promise<void> | void> = []
@@ -135,6 +136,34 @@ describe('administrator session protection', () => {
 })
 
 describe('account usage summary', () => {
+  it('estimates whether current consumption reaches a limit before the window resets', () => {
+    const account = (input: Partial<ManagedAccount>) => input as ManagedAccount
+    expect(estimateAccountUsageAvailability([account({
+      usageFiveHourPercent: 10,
+      usageFiveHourRemainingSeconds: 9_000,
+      usageSevenDayPercent: null,
+      usageSevenDayRemainingSeconds: null
+    })])).toEqual({
+      status: 'sustainable_until_reset', remainingSeconds: 9_000, limitingWindow: 'five_hour',
+      consumptionRatePercentPerHour: 4, sampleCount: 1
+    })
+    expect(estimateAccountUsageAvailability([account({
+      usageFiveHourPercent: 0,
+      usageFiveHourRemainingSeconds: 9_000,
+      usageSevenDayPercent: null,
+      usageSevenDayRemainingSeconds: null
+    })])).toEqual({
+      status: 'sustainable_until_reset', remainingSeconds: 9_000, limitingWindow: 'five_hour',
+      consumptionRatePercentPerHour: 0, sampleCount: 1
+    })
+    expect(estimateAccountUsageAvailability([account({
+      usageFiveHourPercent: 40,
+      usageFiveHourRemainingSeconds: null,
+      usageSevenDayPercent: null,
+      usageSevenDayRemainingSeconds: null
+    })]).status).toBe('insufficient_data')
+  })
+
   it('excludes accounts with either exhausted window and ignores missing or non-finite values', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-usage-'))
     const appConfig = config(directory)
@@ -158,7 +187,11 @@ describe('account usage summary', () => {
       accountCount: 0,
       eligibleAccountCount: 0,
       fiveHour: { averagePercent: null, queriedCount: 0 },
-      sevenDay: { averagePercent: null, queriedCount: 0 }
+      sevenDay: { averagePercent: null, queriedCount: 0 },
+      availability: {
+        status: 'insufficient_data', remainingSeconds: null, limitingWindow: null,
+        consumptionRatePercentPerHour: null, sampleCount: 0
+      }
     })
 
     const repository = new AccountRepository(db, new SecretCipher(appConfig.masterKey))
@@ -170,7 +203,11 @@ describe('account usage summary', () => {
     const epsilon = create('epsilon@example.com')
     const zeta = create('zeta@example.com')
     repository.linkRemote(alpha.id, { id: 101, name: 'alpha' }, null)
-    repository.syncRemote(alpha.id, { id: 101, five_hour: { utilization: 12.5 }, seven_day: { utilization: 25 } })
+    repository.syncRemote(alpha.id, {
+      id: 101,
+      five_hour: { utilization: 12.5, remaining_seconds: 17_000 },
+      seven_day: { utilization: 25, remaining_seconds: 500_000 }
+    })
     repository.linkRemote(beta.id, { id: 102, name: 'beta' }, null)
     repository.syncRemote(beta.id, { id: 102, five_hour: { utilization: 100 }, seven_day: { utilization: 50 } })
     repository.linkRemote(delta.id, { id: 103, name: 'delta' }, null)
@@ -188,7 +225,11 @@ describe('account usage summary', () => {
       accountCount: 6,
       eligibleAccountCount: 3,
       fiveHour: { averagePercent: 21.25, queriedCount: 2 },
-      sevenDay: { averagePercent: 50, queriedCount: 2 }
+      sevenDay: { averagePercent: 50, queriedCount: 2 },
+      availability: {
+        status: 'exhausts_before_reset', remainingSeconds: 7_000, limitingWindow: 'five_hour',
+        consumptionRatePercentPerHour: 45, sampleCount: 1
+      }
     })
 
     const searched = await app.inject({ method: 'GET', url: '/api/accounts?search=alpha', headers: { cookie: cookie! } })
