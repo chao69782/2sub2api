@@ -3,8 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AppConfig } from './config.js'
+import { SecretCipher } from './crypto.js'
 import { openDatabase, type WorkbenchDatabase } from './db.js'
 import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate, resolveAccountImportDefaults } from './app.js'
+import { AccountRepository } from './repositories.js'
 
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -129,5 +131,69 @@ describe('administrator session protection', () => {
     expect(listed.statusCode).toBe(200)
     expect(listed.json().items[0].sub2apiAccountName).toBe('Primary OpenAI')
     expect(listed.json().items[0].importOverrides).toEqual(importOverrides)
+  })
+})
+
+describe('account usage summary', () => {
+  it('excludes accounts with either exhausted window and ignores missing or non-finite values', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-usage-'))
+    const appConfig = config(directory)
+    const db = openDatabase(directory)
+    const app = await buildApp(appConfig, db)
+    cleanup.push(async () => {
+      await app.close()
+      db.close()
+      fs.rmSync(directory, { recursive: true, force: true })
+    })
+
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'test-password' } })
+    expect(login.statusCode).toBe(200)
+    const setCookie = login.headers['set-cookie']
+    const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(';')[0]
+    expect(cookie).toContain('workbench_session=')
+
+    const empty = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
+    expect(empty.statusCode).toBe(200)
+    expect(empty.json().usageSummary).toEqual({
+      accountCount: 0,
+      eligibleAccountCount: 0,
+      fiveHour: { averagePercent: null, queriedCount: 0 },
+      sevenDay: { averagePercent: null, queriedCount: 0 }
+    })
+
+    const repository = new AccountRepository(db, new SecretCipher(appConfig.masterKey))
+    const create = (email: string) => repository.create({ email, password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    const alpha = create('alpha@example.com')
+    const beta = create('beta@example.com')
+    create('gamma@example.com')
+    const delta = create('delta@example.com')
+    const epsilon = create('epsilon@example.com')
+    const zeta = create('zeta@example.com')
+    repository.linkRemote(alpha.id, { id: 101, name: 'alpha' }, null)
+    repository.syncRemote(alpha.id, { id: 101, five_hour: { utilization: 12.5 }, seven_day: { utilization: 25 } })
+    repository.linkRemote(beta.id, { id: 102, name: 'beta' }, null)
+    repository.syncRemote(beta.id, { id: 102, five_hour: { utilization: 100 }, seven_day: { utilization: 50 } })
+    repository.linkRemote(delta.id, { id: 103, name: 'delta' }, null)
+    db.prepare('UPDATE sub2api_links SET last_snapshot_json = ? WHERE account_id = ?')
+      .run('{"five_hour":{"utilization":1e309},"seven_day":{"utilization":75}}', delta.id)
+    repository.linkRemote(epsilon.id, { id: 104, name: 'epsilon' }, null)
+    repository.syncRemote(epsilon.id, { id: 104, five_hour: { utilization: 30 }, seven_day: { utilization: 100 } })
+    repository.linkRemote(zeta.id, { id: 105, name: 'zeta' }, null)
+    repository.syncRemote(zeta.id, { id: 105, five_hour: { utilization: 30 }, seven_day: null })
+
+    const all = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
+    expect(all.statusCode).toBe(200)
+    expect(all.json().items).toHaveLength(6)
+    expect(all.json().usageSummary).toEqual({
+      accountCount: 6,
+      eligibleAccountCount: 3,
+      fiveHour: { averagePercent: 21.25, queriedCount: 2 },
+      sevenDay: { averagePercent: 50, queriedCount: 2 }
+    })
+
+    const searched = await app.inject({ method: 'GET', url: '/api/accounts?search=alpha', headers: { cookie: cookie! } })
+    expect(searched.statusCode).toBe(200)
+    expect(searched.json().items.map((account: { email: string }) => account.email)).toEqual(['alpha@example.com'])
+    expect(searched.json().usageSummary).toEqual(all.json().usageSummary)
   })
 })

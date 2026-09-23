@@ -3,7 +3,7 @@
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <div>
         <h1 class="text-xl font-semibold">账号</h1>
-        <p class="mt-0.5 text-sm text-slate-500">共 {{ accounts.length }} 个账号</p>
+        <p class="mt-0.5 text-sm text-slate-500">{{ search.trim() ? `匹配 ${accounts.length} 个账号` : `共 ${accounts.length} 个账号` }}</p>
       </div>
       <div class="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
         <div class="relative w-full sm:w-auto">
@@ -18,6 +18,30 @@
 
     <div v-if="message" class="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{{ message }}</div>
     <div v-if="error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ error }}</div>
+
+    <section class="panel mb-4 p-4" aria-labelledby="usage-summary-title">
+      <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 id="usage-summary-title" class="text-sm font-semibold text-slate-900">总体用量窗口</h2>
+          <p class="mt-1 text-xs leading-5 text-slate-500">仅统计 5 小时和 7 天窗口均未达到 100% 的账号；未查询的窗口不参与平均。</p>
+        </div>
+        <span v-if="usageSummary" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
+      </div>
+      <div v-if="usageSummary" class="grid gap-3 sm:grid-cols-2">
+        <div v-for="window in usageWindows" :key="window.label" class="rounded-md border border-slate-200 bg-slate-50 p-4">
+          <div class="flex items-start justify-between gap-3">
+            <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
+            <span class="text-lg font-semibold tabular-nums text-slate-900">{{ averageUsageLabel(window.averagePercent) }}</span>
+          </div>
+          <p class="mt-1 text-xs text-slate-500">已查询账号的平均占用</p>
+          <div class="mt-4 h-2 rounded-full bg-slate-200" aria-hidden="true">
+            <div class="h-2 rounded-full bg-emerald-600" :style="{ width: usageWidth(window.averagePercent) }" />
+          </div>
+          <p class="mt-3 text-xs text-slate-600">已查询 {{ window.queriedCount }}/{{ usageSummary.eligibleAccountCount }} 个</p>
+        </div>
+      </div>
+      <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
+    </section>
 
     <div class="panel overflow-hidden">
       <div v-if="loading" class="flex h-48 items-center justify-center text-slate-500"><LoaderCircle class="animate-spin" :size="22" /></div>
@@ -223,7 +247,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Bot, Download, LoaderCircle, Pencil, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
-import type { AccountImportOverrides, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
+import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
 import ModalDialog from '../components/ModalDialog.vue'
 import NullableNumberField from '../components/NullableNumberField.vue'
@@ -231,6 +255,14 @@ import NumberField from '../components/NumberField.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const accounts = ref<ManagedAccount[]>([])
+const usageSummary = ref<AccountUsageSummary | null>(null)
+const usageWindows = computed(() => {
+  const summary = usageSummary.value
+  return summary ? [
+    { label: '5 小时窗口', ...summary.fiveHour },
+    { label: '7 天窗口', ...summary.sevenDay }
+  ] : []
+})
 const selectedIds = ref<string[]>([])
 const allSelected = computed(() => accounts.value.length > 0 && accounts.value.every((account) => selectedIds.value.includes(account.id)))
 const loading = ref(false)
@@ -278,6 +310,7 @@ function shortError(value: string): string {
 }
 function usageWidth(value: number | null): string { return `${Math.min(Math.max(value ?? 0, 0), 100)}%` }
 function usageLabel(value: number | null): string { return value === null ? '-' : `${Math.round(value)}%` }
+function averageUsageLabel(value: number | null): string { return value === null ? '-' : `${Number(value.toFixed(1))}%` }
 function displayHealthStatus(account: ManagedAccount): string {
   return Math.max(account.usageFiveHourPercent ?? 0, account.usageSevenDayPercent ?? 0) >= 100 ? 'rate_limited' : account.healthStatus
 }
@@ -299,7 +332,7 @@ function authorizationResult(account: ManagedAccount) {
 }
 function setResult(text: string, isError = false) { error.value = isError ? text : ''; message.value = isError ? '' : text }
 function toggleAll(event: Event) { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? accounts.value.map((account) => account.id) : [] }
-async function load() { loading.value = true; try { accounts.value = (await api.listAccounts(search.value)).items; selectedIds.value = selectedIds.value.filter((id) => accounts.value.some((account) => account.id === id)) } catch (e) { setResult(e instanceof Error ? e.message : '加载失败', true) } finally { loading.value = false } }
+async function load() { loading.value = true; try { const response = await api.listAccounts(search.value); accounts.value = response.items; usageSummary.value = response.usageSummary; selectedIds.value = selectedIds.value.filter((id) => accounts.value.some((account) => account.id === id)) } catch (e) { setResult(e instanceof Error ? e.message : '加载失败', true) } finally { loading.value = false } }
 async function loadAuthorizationMetadata() {
   const configuration = await api.getSettings()
   globalSettings.value = configuration.value
@@ -307,7 +340,7 @@ async function loadAuthorizationMetadata() {
   if (groupResult.status === 'fulfilled') groups.value = groupResult.value.items
   if (proxyResult.status === 'fulfilled') proxies.value = proxyResult.value.items
 }
-async function pollStatuses() { try { accounts.value = (await api.listAccounts(search.value)).items } catch { /* Keep the current list during transient polling failures. */ } }
+async function pollStatuses() { try { const response = await api.listAccounts(search.value); accounts.value = response.items; usageSummary.value = response.usageSummary } catch { /* Keep the current list during transient polling failures. */ } }
 function debouncedLoad() { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
 function openImport() { credentialText.value = ''; previewRows.value = []; importOpen.value = true }
 async function preview() { try { const response = await api.previewImport(credentialText.value); previewRows.value = response.rows } catch (e) { setResult(e instanceof Error ? e.message : '预检失败', true) } }

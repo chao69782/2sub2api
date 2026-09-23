@@ -155,7 +155,6 @@ docker run -d \
   --restart unless-stopped \
   -p 1000:1000 \
   --shm-size=1g \
-  --add-host host.docker.internal:host-gateway \
   -v /opt/openai-auth-workbench/config.yaml:/app/config/config.yaml:ro \
   -v /opt/openai-auth-workbench/data:/app/data \
   -v /opt/openai-auth-workbench/secrets/workbench_admin_password.txt:/run/secrets/workbench_admin_password:ro \
