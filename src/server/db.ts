@@ -159,6 +159,19 @@ export function openDatabase(dataDir: string): Database.Database {
   if (!accountColumns.has('import_overrides_json')) {
     db.exec('ALTER TABLE managed_accounts ADD COLUMN import_overrides_json TEXT')
   }
+  const rollbackProfitFeature = db.transaction(() => {
+    db.exec(`
+      DROP TABLE IF EXISTS profit_limit_states;
+      DROP TABLE IF EXISTS profit_settlements;
+    `)
+    const currentAccountColumns = new Set(
+      (db.pragma('table_info(managed_accounts)') as Array<{ name: string }>).map((column) => column.name)
+    )
+    if (currentAccountColumns.has('cost_price')) {
+      db.exec('ALTER TABLE managed_accounts DROP COLUMN cost_price')
+    }
+  })
+  rollbackProfitFeature()
   const purgeLegacySoftDeletes = db.transaction(() => {
     const rows = db.prepare(`
       SELECT password_secret_id, totp_secret_id
