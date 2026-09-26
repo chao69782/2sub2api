@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS managed_accounts (
   desired_remote_name TEXT,
   password_secret_id TEXT,
   totp_secret_id TEXT,
+  totp_rotated_at TEXT,
   notes TEXT NOT NULL DEFAULT '',
   tags_json TEXT NOT NULL DEFAULT '[]',
   auth_policy TEXT NOT NULL DEFAULT 'managed_login',
@@ -158,6 +159,9 @@ export function openDatabase(dataDir: string): Database.Database {
   }
   if (!accountColumns.has('import_overrides_json')) {
     db.exec('ALTER TABLE managed_accounts ADD COLUMN import_overrides_json TEXT')
+  }
+  if (!accountColumns.has('totp_rotated_at')) {
+    db.exec('ALTER TABLE managed_accounts ADD COLUMN totp_rotated_at TEXT')
   }
   const rollbackProfitFeature = db.transaction(() => {
     db.exec(`

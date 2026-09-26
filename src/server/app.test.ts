@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { authenticator } from 'otplib'
 import type { ManagedAccount } from '../shared/types.js'
 import type { AppConfig } from './config.js'
 import { SecretCipher } from './crypto.js'
@@ -120,6 +121,31 @@ describe('administrator session protection', () => {
     const imported = await app.inject({ method: 'POST', url: '/api/accounts/import', headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { text: 'a@example.com--password--JBSWY3DPEHPK3PXP' } })
     expect(imported.statusCode).toBe(201)
     const accountId = imported.json().created[0].id as string
+    const blocked = await app.inject({ method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { accountName: 'Primary OpenAI' } })
+    expect(blocked.statusCode).toBe(409)
+    expect(blocked.json().code).toBe('TOTP_ROTATION_REQUIRED')
+
+    const newTotpSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
+    const validCode = authenticator.generate(newTotpSecret)
+    const invalidCode = `${(Number(validCode[0]) + 1) % 10}${validCode.slice(1)}`
+    const wrongCode = await app.inject({ method: 'PUT', url: `/api/accounts/${accountId}/totp`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { newTotpSecret, verificationCode: invalidCode, confirmedOpenAIChange: true } })
+    expect(wrongCode.statusCode).toBe(400)
+    expect(new AccountRepository(db, new SecretCipher(config(directory).masterKey)).getSecrets(accountId).totpSecret).toBe('JBSWY3DPEHPK3PXP')
+    const unconfirmed = await app.inject({ method: 'PUT', url: `/api/accounts/${accountId}/totp`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { newTotpSecret, verificationCode: validCode, confirmedOpenAIChange: false } })
+    expect(unconfirmed.statusCode).toBe(400)
+    const rotated = await app.inject({ method: 'PUT', url: `/api/accounts/${accountId}/totp`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { newTotpSecret, verificationCode: validCode, confirmedOpenAIChange: true } })
+    expect(rotated.statusCode).toBe(200)
+    expect(rotated.json().totpRotatedAt).toBeTruthy()
+    expect(new AccountRepository(db, new SecretCipher(config(directory).masterKey)).getSecrets(accountId).totpSecret).toBe(newTotpSecret)
+    const viewDenied = await app.inject({ method: 'POST', url: `/api/accounts/${accountId}/credentials/view`, headers: { cookie: cookie! } })
+    expect(viewDenied.statusCode).toBe(403)
+    const viewed = await app.inject({ method: 'POST', url: `/api/accounts/${accountId}/credentials/view`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken } })
+    expect(viewed.statusCode).toBe(200)
+    expect(viewed.headers['cache-control']).toBe('no-store, private')
+    expect(viewed.json()).toEqual({ email: 'a@example.com', password: 'password', totpSecret: newTotpSecret })
+    const repeated = await app.inject({ method: 'PUT', url: `/api/accounts/${accountId}/totp`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { newTotpSecret, verificationCode: validCode, confirmedOpenAIChange: true } })
+    expect(repeated.statusCode).toBe(400)
+    expect(repeated.json().code).toBe('TOTP_SECRET_UNCHANGED')
     const importOverrides = {
       modelWhitelist: ['gpt-5.6-luna'], concurrency: 6, priority: 70, groupIds: [], loadFactor: null,
       autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null

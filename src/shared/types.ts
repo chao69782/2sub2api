@@ -86,6 +86,7 @@ export interface ManagedAccount {
   syncStatus: SyncStatus
   sub2apiStatus: string | null
   sub2apiAccountId: number | null
+  totpRotatedAt: string | null
   sub2apiAccountName: string | null
   selectedProxyId: number | null
   tokenExpiresAt: string | null

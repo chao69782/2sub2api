@@ -17,6 +17,7 @@ interface AccountRow {
   sync_status: ManagedAccount['syncStatus']
   remote_account_id: number | null
   remote_name: string | null
+  totp_rotated_at: string | null
   selected_proxy_id: number | null
   token_expires_at: string | null
   last_auth_at: string | null
@@ -73,6 +74,7 @@ function mapAccount(row: AccountRow): ManagedAccount {
     syncStatus: row.sync_status,
     sub2apiStatus: typeof usage.status === 'string' ? usage.status : null,
     sub2apiAccountId: row.remote_account_id,
+    totpRotatedAt: row.totp_rotated_at,
     sub2apiAccountName: row.remote_name || row.desired_remote_name || null,
     selectedProxyId: row.selected_proxy_id,
     tokenExpiresAt: row.token_expires_at,
@@ -170,7 +172,7 @@ export class AccountRepository {
     return this.get(accountId)!
   }
 
-  update(accountId: string, input: { email?: string; password?: string; totpSecret?: string; notes?: string; importOverrides?: AccountImportOverrides | null }): ManagedAccount {
+  update(accountId: string, input: { email?: string; password?: string; notes?: string; importOverrides?: AccountImportOverrides | null }): ManagedAccount {
     const current = this.db.prepare('SELECT * FROM managed_accounts WHERE id = ? AND deleted_at IS NULL').get(accountId) as Record<string, unknown> | undefined
     if (!current) throw new Error('ACCOUNT_NOT_FOUND')
     const updates: string[] = []
@@ -189,16 +191,26 @@ export class AccountRepository {
       if (secretId) this.updateSecret(secretId, input.password)
       else { updates.push('password_secret_id = ?'); values.push(this.insertSecret('openai_password', input.password)) }
     }
-    if (input.totpSecret) {
-      const secretId = String(current.totp_secret_id ?? '')
-      if (secretId) this.updateSecret(secretId, input.totpSecret)
-      else { updates.push('totp_secret_id = ?'); values.push(this.insertSecret('openai_totp', input.totpSecret)) }
-    }
     if (updates.length) {
       updates.push('updated_at = ?')
       values.push(now(), accountId)
       this.db.prepare(`UPDATE managed_accounts SET ${updates.join(', ')} WHERE id = ?`).run(...values)
     }
+    return this.get(accountId)!
+  }
+
+  rotateTotpSecret(accountId: string, newSecret: string): ManagedAccount {
+    const transaction = this.db.transaction(() => {
+      const row = this.db.prepare('SELECT totp_secret_id FROM managed_accounts WHERE id = ? AND deleted_at IS NULL')
+        .get(accountId) as { totp_secret_id: string | null } | undefined
+      if (!row?.totp_secret_id) throw new Error('ACCOUNT_SECRETS_MISSING')
+      if (this.readSecret(row.totp_secret_id) === newSecret) throw new Error('2FA 密钥与当前密钥相同')
+      this.updateSecret(row.totp_secret_id, newSecret)
+      const timestamp = now()
+      this.db.prepare('UPDATE managed_accounts SET totp_rotated_at = ?, updated_at = ? WHERE id = ?')
+        .run(timestamp, timestamp, accountId)
+    })
+    transaction()
     return this.get(accountId)!
   }
 
