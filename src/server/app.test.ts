@@ -181,7 +181,7 @@ describe('account usage summary', () => {
     })]).status).toBe('insufficient_data')
   })
 
-  it('excludes exhausted windows from usage and unhealthy accounts from availability', async () => {
+  it('excludes exhausted and error accounts from every usage statistic', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-usage-'))
     const appConfig = config(directory)
     const db = openDatabase(directory)
@@ -219,6 +219,7 @@ describe('account usage summary', () => {
     const delta = create('delta@example.com')
     const epsilon = create('epsilon@example.com')
     const zeta = create('zeta@example.com')
+    const eta = create('eta@example.com')
     repository.linkRemote(alpha.id, { id: 101, name: 'alpha' }, null)
     repository.syncRemote(alpha.id, {
       id: 101,
@@ -236,15 +237,21 @@ describe('account usage summary', () => {
     repository.linkRemote(zeta.id, { id: 105, name: 'zeta' }, null)
     repository.syncRemote(zeta.id, { id: 105, five_hour: { utilization: 30, remaining_seconds: 9_000 }, seven_day: null })
     repository.markHealth(zeta.id, { status: 'network_error', summary: '网络错误' })
+    repository.linkRemote(eta.id, { id: 106, name: 'eta' }, null)
+    repository.syncRemote(eta.id, { id: 106, status: 'error', five_hour: { utilization: 60, remaining_seconds: 9_000 }, seven_day: { utilization: 70, remaining_seconds: 400_000 } })
+    repository.markHealth(eta.id, { status: 'healthy' })
+    repository.syncRemote(eta.id, { id: 106, five_hour: { utilization: 60, remaining_seconds: 9_000 }, seven_day: undefined })
+    expect(repository.get(eta.id)?.sub2apiStatus).toBe('error')
+    expect(repository.get(eta.id)?.usageSevenDayPercent).toBeNull()
 
     const all = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
     expect(all.statusCode).toBe(200)
-    expect(all.json().items).toHaveLength(6)
+    expect(all.json().items).toHaveLength(7)
     expect(all.json().usageSummary).toEqual({
-      accountCount: 6,
-      eligibleAccountCount: 3,
-      fiveHour: { averagePercent: 21.25, queriedCount: 2 },
-      sevenDay: { averagePercent: 50, queriedCount: 2 },
+      accountCount: 7,
+      eligibleAccountCount: 1,
+      fiveHour: { averagePercent: 12.5, queriedCount: 1 },
+      sevenDay: { averagePercent: 25, queriedCount: 1 },
       availability: {
         status: 'exhausts_before_reset', remainingSeconds: 7_000, limitingWindow: 'five_hour',
         consumptionRatePercentPerHour: 45, sampleCount: 1
@@ -257,13 +264,16 @@ describe('account usage summary', () => {
     expect(searched.json().usageSummary).toEqual(all.json().usageSummary)
 
     const secondPage = await app.inject({ method: 'GET', url: '/api/accounts?page=2&pageSize=2', headers: { cookie: cookie! } })
-    expect(secondPage.json()).toMatchObject({ total: 6, page: 2, pageSize: 2 })
+    expect(secondPage.json()).toMatchObject({ total: 7, page: 2, pageSize: 2 })
     expect(secondPage.json().items).toHaveLength(2)
     expect(secondPage.json().usageSummary).toEqual(all.json().usageSummary)
 
     const rateLimited = await app.inject({ method: 'GET', url: '/api/accounts?status=rate_limited', headers: { cookie: cookie! } })
     expect(rateLimited.json().items.map((account: { email: string }) => account.email).sort()).toEqual(['beta@example.com', 'delta@example.com', 'epsilon@example.com'])
     expect(rateLimited.json().total).toBe(3)
+
+    const remoteError = await app.inject({ method: 'GET', url: '/api/accounts?status=invalid_credentials', headers: { cookie: cookie! } })
+    expect(remoteError.json().items.map((account: { email: string }) => account.email)).toEqual(['eta@example.com'])
 
     const filtered = await app.inject({ method: 'GET', url: '/api/accounts?search=zeta&status=network_error&page=3&pageSize=2', headers: { cookie: cookie! } })
     expect(filtered.json()).toMatchObject({ total: 1, page: 1, pageSize: 2 })
@@ -274,9 +284,23 @@ describe('account usage summary', () => {
 
     repository.markHealth(alpha.id, { status: 'network_error', summary: '网络错误' })
     const allUnhealthy = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
+    expect(allUnhealthy.json().usageSummary.eligibleAccountCount).toBe(0)
+    expect(allUnhealthy.json().usageSummary.fiveHour).toEqual({ averagePercent: null, queriedCount: 0 })
     expect(allUnhealthy.json().usageSummary.availability).toEqual({
       status: 'insufficient_data', remainingSeconds: null, limitingWindow: null,
       consumptionRatePercentPerHour: null, sampleCount: 0
     })
+
+    repository.markHealth(alpha.id, { status: 'healthy' })
+    repository.markAuthorizationFailure(alpha.id, false, 'REAUTH_FAILED', '重新授权失败')
+    const authFailed = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
+    expect(authFailed.json().usageSummary.eligibleAccountCount).toBe(0)
+
+    repository.linkRemote(alpha.id, { id: 101, name: 'alpha' }, null)
+    repository.syncRemote(alpha.id, { id: 101, five_hour: { utilization: 12.5, remaining_seconds: 17_000 } })
+    repository.markHealth(alpha.id, { status: 'healthy' })
+    repository.setSyncStatus(alpha.id, 'remote_missing')
+    const remoteMissing = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
+    expect(remoteMissing.json().usageSummary.eligibleAccountCount).toBe(0)
   })
 })

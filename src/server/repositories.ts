@@ -56,7 +56,7 @@ function usageRemainingSeconds(window: UsageWindowSnapshot | null | undefined): 
 }
 
 function mapAccount(row: AccountRow): ManagedAccount {
-  let usage: { five_hour?: UsageWindowSnapshot | null; seven_day?: UsageWindowSnapshot | null } = {}
+  let usage: { status?: unknown; five_hour?: UsageWindowSnapshot | null; seven_day?: UsageWindowSnapshot | null } = {}
   let importOverrides: AccountImportOverrides | null = null
   try { usage = JSON.parse(row.last_snapshot_json || '{}') as typeof usage } catch { /* ignore malformed snapshots */ }
   try {
@@ -71,6 +71,7 @@ function mapAccount(row: AccountRow): ManagedAccount {
     authStatus: row.auth_status,
     healthStatus: row.health_status,
     syncStatus: row.sync_status,
+    sub2apiStatus: typeof usage.status === 'string' ? usage.status : null,
     sub2apiAccountId: row.remote_account_id,
     sub2apiAccountName: row.remote_name || row.desired_remote_name || null,
     selectedProxyId: row.selected_proxy_id,
@@ -267,7 +268,11 @@ export class AccountRepository {
       const previous = this.db.prepare('SELECT last_snapshot_json FROM sub2api_links WHERE account_id = ? AND remote_account_id = ?').get(accountId, remote.id) as { last_snapshot_json?: string } | undefined
       let snapshot: Record<string, unknown> = {}
       try { snapshot = JSON.parse(previous?.last_snapshot_json || '{}') as Record<string, unknown> } catch { /* replace malformed snapshot */ }
+      const previousStatus = snapshot.status
+      const previousSchedulable = snapshot.schedulable
       snapshot = { ...snapshot, ...remote }
+      if (remote.status === undefined && previousStatus !== undefined) snapshot.status = previousStatus
+      if (remote.schedulable === undefined && previousSchedulable !== undefined) snapshot.schedulable = previousSchedulable
       this.db.prepare(`
         UPDATE sub2api_links SET remote_name = ?, last_snapshot_json = ?, last_synced_at = ?
         WHERE account_id = ? AND remote_account_id = ?

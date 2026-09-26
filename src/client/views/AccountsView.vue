@@ -34,7 +34,7 @@
       <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 id="usage-summary-title" class="text-sm font-semibold text-slate-900">总体用量窗口</h2>
-          <p class="mt-1 text-xs leading-5 text-slate-500">用量均值仅统计 5 小时和 7 天窗口均未达到 100% 的账号；未查询的窗口不参与平均。预计剩余可用时间仅统计其中健康的账号。</p>
+          <p class="mt-1 text-xs leading-5 text-slate-500">用量均值和预计剩余可用时间仅统计已授权、同步正常且健康的账号；已耗尽的账号不参与统计，未查询的窗口不参与平均。</p>
         </div>
         <span v-if="usageSummary" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
       </div>
@@ -139,7 +139,8 @@
               <td class="px-2 py-3 align-middle text-center">
                 <div class="flex min-w-0 flex-col items-center justify-center">
                   <StatusBadge :value="displayHealthStatus(account)" />
-                  <div v-if="displayHealthStatus(account) !== 'healthy' && account.lastErrorSummary" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600" :title="account.lastErrorSummary">
+                  <div v-if="account.sub2apiStatus?.toLowerCase() === 'error'" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600">Sub2API 账号错误</div>
+                  <div v-else-if="displayHealthStatus(account) !== 'healthy' && account.lastErrorSummary" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600" :title="account.lastErrorSummary">
                     {{ shortError(account.lastErrorSummary) }}
                   </div>
                 </div>

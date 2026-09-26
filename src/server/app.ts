@@ -6,7 +6,7 @@ import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
 import { displayHealthStatus } from '../shared/account-status.js'
-import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings, UsageAvailabilityEstimate, UsageWindowKind, UsageWindowSummary } from '../shared/types.js'
+import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings, UsageAvailabilityEstimate, UsageWindowKind, UsageWindowSummary } from '../shared/types.js'
 import { AuthService } from './auth.js'
 import type { AppConfig } from './config.js'
 import { configRuntimeSettings } from './config.js'
@@ -14,7 +14,7 @@ import { SecretCipher } from './crypto.js'
 import type { WorkbenchDatabase } from './db.js'
 import { parseCredentialText, normalizeTotpSecret } from './import-parser.js'
 import { AccountRepository, JobRepository, SettingsRepository, type WorkbenchJob } from './repositories.js'
-import { Sub2APIClient, Sub2APIError, sub2apiTokenExpiresAt, type Sub2APIAccount } from './sub2api.js'
+import { Sub2APIClient, Sub2APIError, sub2apiTokenExpiresAt, type Sub2APIAccount, type Sub2APIUsage } from './sub2api.js'
 import { ManualActionRequiredError, OpenAIAuthDriver } from './openai-auth-driver.js'
 
 const schedulerSchema = z.object({
@@ -170,7 +170,9 @@ function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary 
   const eligibleAccounts = accounts.filter((account) => {
     const knownValues = [account.usageFiveHourPercent, account.usageSevenDayPercent]
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-    return account.healthStatus !== 'rate_limited' &&
+    return account.authStatus === 'authorized' &&
+      account.syncStatus === 'synced' &&
+      displayHealthStatus(account) === 'healthy' &&
       knownValues.length > 0 &&
       knownValues.every((value) => value >= 0 && value < 100)
   })
@@ -179,8 +181,22 @@ function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary 
     eligibleAccountCount: eligibleAccounts.length,
     fiveHour: summarizeUsageWindow(eligibleAccounts, 'usageFiveHourPercent'),
     sevenDay: summarizeUsageWindow(eligibleAccounts, 'usageSevenDayPercent'),
-    availability: estimateAccountUsageAvailability(eligibleAccounts.filter((account) => account.healthStatus === 'healthy'))
+    availability: estimateAccountUsageAvailability(eligibleAccounts)
   }
+}
+
+function usageHealthIssue(usage: Sub2APIUsage): { status: HealthStatus; errorCode: string; summary: string } | null {
+  if (!usage.needs_reauth && !usage.error_code?.trim() && !usage.error?.trim()) return null
+  return {
+    status: usage.needs_reauth ? 'invalid_credentials' : 'degraded',
+    errorCode: usage.error_code?.trim() || (usage.needs_reauth ? 'REAUTH_REQUIRED' : 'USAGE_ERROR'),
+    summary: usage.error?.trim() || (usage.needs_reauth ? '用量接口提示需要重新授权' : '用量接口返回错误')
+  }
+}
+
+function usageHasWindow(usage: Sub2APIUsage): boolean {
+  return [usage.five_hour?.utilization, usage.seven_day?.utilization]
+    .some((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)
 }
 
 export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promise<FastifyInstance> {
@@ -291,7 +307,12 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     accounts.linkRemote(accountId, { id: remote.id, name: remote.name, expiresAt: sub2apiTokenExpiresAt(remote) }, proxyId)
     const usage = await sub2api.queryAccountUsage(remote.id).catch(() => null)
     if (usage) accounts.syncRemote(accountId, { id: remote.id, name: remote.name, expiresAt: sub2apiTokenExpiresAt(remote), five_hour: usage.five_hour, seven_day: usage.seven_day })
-    accounts.markHealth(accountId, { status: usage ? 'healthy' : 'unknown', summary: usage ? '用量窗口查询成功' : null })
+    const usageIssue = usage && usageHealthIssue(usage)
+    const hasUsageWindow = usage ? usageHasWindow(usage) : false
+    accounts.markHealth(accountId, usageIssue ?? {
+      status: hasUsageWindow ? 'healthy' : 'unknown',
+      summary: hasUsageWindow ? '用量窗口查询成功' : null
+    })
     return { account: accounts.get(accountId), remote, usage, proxyId }
   }
 
@@ -574,6 +595,11 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
       return
     }
 
+    if (job.type === 'health_test' && (account.sub2apiStatus?.toLowerCase() === 'error' || account.syncStatus !== 'synced')) {
+      jobs.complete(job.id)
+      return
+    }
+
     if (job.type === 'refresh') {
       try {
         const remote = await sub2api.refreshOpenAIAccount(account.sub2apiAccountId)
@@ -607,10 +633,11 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
       return
     }
 
-    accounts.markHealth(account.id, {
-      status: 'healthy',
+    const hasUsageWindow = usageHasWindow(usage)
+    accounts.markHealth(account.id, usageHealthIssue(usage) ?? {
+      status: hasUsageWindow ? 'healthy' : 'unknown',
       errorCode: null,
-      summary: usageIsLimited(usage) ? '用量已达到 100%，账号处于限流状态' : '用量窗口查询成功'
+      summary: !hasUsageWindow ? '用量窗口暂无有效数据' : usageIsLimited(usage) ? '用量已达到 100%，账号处于限流状态' : '用量窗口查询成功'
     })
     jobs.complete(job.id)
   }
@@ -638,6 +665,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
       const runtime = settings.get().value.scheduler
       const timestamp = Date.now()
       const allAccounts = accounts.list()
+      const remoteErrorAccountIds = new Set(allAccounts.filter((account) => account.sub2apiStatus?.toLowerCase() === 'error').map((account) => account.id))
 
       if (timestamp - lastRemoteSyncAt >= runtime.checkIntervalMinutes * 60_000) {
         try {
@@ -665,16 +693,20 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
                 id: synchronizedSnapshot.id,
                 name: synchronizedSnapshot.name,
                 expiresAt: sub2apiTokenExpiresAt(synchronizedSnapshot),
-                status: synchronizedSnapshot.status,
-                schedulable: synchronizedSnapshot.schedulable
+                status: synchronizedSnapshot.status ?? snapshot.status,
+                schedulable: synchronizedSnapshot.schedulable ?? snapshot.schedulable
               })
+
+              const remoteStatus = (synchronizedSnapshot.status ?? snapshot.status)?.toLowerCase()
+              if (remoteStatus === 'error') remoteErrorAccountIds.add(account.id)
+              else if (remoteStatus) remoteErrorAccountIds.delete(account.id)
 
               // Sub2API is the source of truth for account health.  Its
               // `status=error` means the upstream token was rejected (401),
               // so queue reauthorization without running a model test or a
-              // usage-window request.  Do not mutate the local health state:
-              // Sub2API already owns the error/scheduling flags remotely.
-              if (String(synchronizedSnapshot.status ?? '').toLowerCase() === 'error') {
+              // usage-window request. The synced status also controls the
+              // displayed health and usage summary.
+              if (remoteStatus === 'error') {
                 if (canAutoReauthorize(account)) {
                   const queued = jobs.enqueue({
                     accountId: account.id,
@@ -722,7 +754,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
         const healthDue = account.sub2apiAccountId && (
           !account.lastCheckAt || timestamp - new Date(account.lastCheckAt).getTime() >= runtime.checkIntervalMinutes * 60_000
         )
-        if (healthDue) {
+        if (healthDue && !remoteErrorAccountIds.has(account.id)) {
           jobs.enqueue({ accountId: account.id, type: 'health_test' })
         }
       }
