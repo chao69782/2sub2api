@@ -41,11 +41,7 @@ export const api = {
   previewImport(text: string) { return request<{ rows: Array<Record<string, unknown>>; validCount: number }>('/api/accounts/import/preview', { method: 'POST', body: JSON.stringify({ text }) }) },
   importAccounts(text: string) { return request<{ created: ManagedAccount[]; errors: Array<{ line: number; message: string }> }>('/api/accounts/import', { method: 'POST', body: JSON.stringify({ text }) }) },
   updateAccount(id: string, body: Record<string, unknown>) { return request<ManagedAccount>(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) }) },
-  rotateTotp(id: string, newTotpSecret: string, verificationCode: string) {
-    return request<ManagedAccount>(`/api/accounts/${id}/totp`, {
-      method: 'PUT', body: JSON.stringify({ newTotpSecret, verificationCode, confirmedOpenAIChange: true })
-    })
-  },
+  rotateTotp(id: string) { return request(`/api/accounts/${id}/totp/rotate`, { method: 'POST' }) },
   viewCredentials(id: string) {
     return request<{ email: string; password: string; totpSecret: string }>(`/api/accounts/${id}/credentials/view`, { method: 'POST', cache: 'no-store' })
   },

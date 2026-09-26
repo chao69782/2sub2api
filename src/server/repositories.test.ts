@@ -42,6 +42,21 @@ describe('AccountRepository', () => {
     })
   })
 
+  it('keeps the old TOTP secret active until a staged replacement is promoted', () => {
+    const { db } = testDatabase()
+    const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 7)))
+    const account = repository.create({ email: 'rotate@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    repository.stageTotpSecret(account.id, 'JBSWY3DPEHPK3PXPJBSWY3DP')
+    expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXP')
+    expect(repository.getPendingTotpSecret(account.id)).toBe('JBSWY3DPEHPK3PXPJBSWY3DP')
+    expect(db.prepare('SELECT COUNT(*) AS count FROM secret_blobs').get()).toEqual({ count: 3 })
+    const updated = repository.promoteStagedTotpSecret(account.id)
+    expect(updated.totpRotatedAt).toBeTruthy()
+    expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXPJBSWY3DP')
+    expect(repository.getPendingTotpSecret(account.id)).toBeNull()
+    expect(db.prepare('SELECT COUNT(*) AS count FROM secret_blobs').get()).toEqual({ count: 2 })
+  })
+
   it('persists and clears account-specific Sub2API import settings', () => {
     const { db } = testDatabase()
     const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 5)))

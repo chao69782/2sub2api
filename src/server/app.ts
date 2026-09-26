@@ -5,7 +5,6 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
-import { authenticator } from 'otplib'
 import { displayHealthStatus } from '../shared/account-status.js'
 import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings, UsageAvailabilityEstimate, UsageWindowKind, UsageWindowSummary } from '../shared/types.js'
 import { AuthService } from './auth.js'
@@ -205,7 +204,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     trustProxy: config.server.trust_proxy,
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
-      redact: ['req.headers.cookie', 'req.headers.x-api-key', 'body.password', 'body.totpSecret', 'body.newTotpSecret', 'body.verificationCode']
+      redact: ['req.headers.cookie', 'req.headers.x-api-key', 'body.password', 'body.totpSecret']
     }
   })
   await app.register(cookie, { secret: config.sessionSecret, hook: 'onRequest' })
@@ -320,9 +319,6 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
   const runManagedOAuth = async (accountId: string, requestedAccountName?: string) => {
     const account = accounts.get(accountId)
     if (!account) throw new Error('ACCOUNT_NOT_FOUND')
-    if (!account.sub2apiAccountId && !account.totpRotatedAt) {
-      throw new ManualActionRequiredError('首次导入 Sub2API 前，请先完成 2FA 修改并在工作台保存新密钥', 'TOTP_ROTATION_REQUIRED')
-    }
     const secrets = accounts.getSecrets(accountId)
     const started = await beginOAuth(accountId)
     const callbackUrl = await authDriver.authorize({
@@ -472,30 +468,6 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     return account
   })
 
-  app.put('/api/accounts/:id/totp', async (request, reply) => {
-    const params = z.object({ id: z.string().uuid() }).parse(request.params)
-    const parsed = z.object({
-      newTotpSecret: z.string().min(1).max(512),
-      verificationCode: z.string().regex(/^\d{6}$/, '请输入新验证器显示的 6 位验证码'),
-      confirmedOpenAIChange: z.boolean()
-    }).strict().safeParse(request.body)
-    if (!parsed.success) return reply.code(400).send({ code: 'TOTP_UPDATE_INVALID', message: '请填写新密钥、6 位验证码并确认修改' })
-    const body = parsed.data
-    if (!body.confirmedOpenAIChange) return reply.code(400).send({ code: 'TOTP_CHANGE_NOT_CONFIRMED', message: '请先在 OpenAI 完成 2FA 修改' })
-    if (!accounts.get(params.id)) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
-    const normalized = normalizeTotpSecret(body.newTotpSecret)
-    if (!normalized) return reply.code(400).send({ code: 'TOTP_SECRET_INVALID', message: '新 2FA 密钥格式无效' })
-    if (!authenticator.check(body.verificationCode, normalized)) {
-      return reply.code(400).send({ code: 'TOTP_CODE_INVALID', message: '验证码与新 2FA 密钥不匹配，请检查密钥和设备时间' })
-    }
-    if (accounts.getSecrets(params.id).totpSecret === normalized) {
-      return reply.code(400).send({ code: 'TOTP_SECRET_UNCHANGED', message: '新 2FA 密钥与当前密钥相同' })
-    }
-    const account = accounts.rotateTotpSecret(params.id, normalized)
-    audit(request, 'account.totp.rotate', 'success', params.id)
-    return account
-  })
-
   app.post('/api/accounts/:id/credentials/view', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
     const account = accounts.get(params.id)
@@ -504,6 +476,15 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     audit(request, 'account.credentials.view', 'success', params.id)
     return reply.header('Cache-Control', 'no-store, private').header('Pragma', 'no-cache')
       .send({ email: account.email, password: secrets.password, totpSecret: secrets.totpSecret })
+  })
+
+  app.post('/api/accounts/:id/totp/rotate', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params)
+    if (!accounts.get(params.id)) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
+    accounts.getSecrets(params.id)
+    const job = jobs.enqueue({ accountId: params.id, type: 'rotate_totp', maxAttempts: 2 })
+    audit(request, 'account.totp.rotate.queued', 'success', params.id, { jobId: job.id })
+    return reply.code(202).send({ job })
   })
 
   app.delete('/api/accounts/:id', async (request, reply) => {
@@ -554,9 +535,6 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     }).parse(request.body)
     const account = accounts.get(params.id)
     if (!account) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
-    if (!account.sub2apiAccountId && !account.totpRotatedAt) {
-      return reply.code(409).send({ code: 'TOTP_ROTATION_REQUIRED', message: '首次导入 Sub2API 前，请先完成 2FA 修改并保存新密钥' })
-    }
     accounts.getSecrets(params.id)
     if (body.importOverrides) await validateImportTarget(body.importOverrides)
     if (body.importOverrides !== undefined) accounts.update(params.id, { importOverrides: body.importOverrides })
@@ -605,6 +583,28 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     const account = accounts.get(job.accountId)
     if (!account) {
       jobs.fail(job, 'ACCOUNT_NOT_FOUND', '账号不存在或已删除')
+      return
+    }
+
+    if (job.type === 'rotate_totp') {
+      try {
+        const secrets = accounts.getSecrets(account.id)
+        await authDriver.rotateTotp({
+          email: account.email,
+          ...secrets,
+          pendingTotpSecret: accounts.getPendingTotpSecret(account.id),
+          stageSecret: (secret) => accounts.stageTotpSecret(account.id, secret)
+        })
+        accounts.promoteStagedTotpSecret(account.id)
+        jobs.complete(job.id)
+        systemAudit('worker.totp_rotate', 'success', account.id)
+      } catch (error) {
+        const manual = error instanceof ManualActionRequiredError
+        const code = manual ? error.code : 'TOTP_ROTATION_FAILED'
+        const summary = error instanceof Error ? error.message : '更换 2FA 失败'
+        jobs.fail(job, code, summary, manual ? undefined : retryAt(job))
+        systemAudit('worker.totp_rotate', 'failed', account.id, { code })
+      }
       return
     }
 

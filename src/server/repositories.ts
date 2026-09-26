@@ -18,6 +18,8 @@ interface AccountRow {
   remote_account_id: number | null
   remote_name: string | null
   totp_rotated_at: string | null
+  totp_rotation_job_status: AuthorizationJobStatus | null
+  totp_rotation_error: string | null
   selected_proxy_id: number | null
   token_expires_at: string | null
   last_auth_at: string | null
@@ -75,6 +77,8 @@ function mapAccount(row: AccountRow): ManagedAccount {
     sub2apiStatus: typeof usage.status === 'string' ? usage.status : null,
     sub2apiAccountId: row.remote_account_id,
     totpRotatedAt: row.totp_rotated_at,
+    totpRotationStatus: row.totp_rotation_job_status,
+    totpRotationError: row.totp_rotation_error,
     sub2apiAccountName: row.remote_name || row.desired_remote_name || null,
     selectedProxyId: row.selected_proxy_id,
     tokenExpiresAt: row.token_expires_at,
@@ -107,6 +111,8 @@ SELECT a.*, l.remote_account_id, l.remote_name,
   j.error_summary AS authorization_error_summary,
   j.updated_at AS authorization_updated_at,
   j.finished_at AS authorization_finished_at
+  ,tj.status AS totp_rotation_job_status
+  ,tj.error_summary AS totp_rotation_error
   ,(SELECT COUNT(*) FROM jobs attempts WHERE attempts.account_id = a.id AND attempts.type = 'authorize') AS auto_reauthorization_count
   ,COALESCE(l.last_snapshot_json, '{}') AS last_snapshot_json
 FROM managed_accounts a
@@ -114,6 +120,11 @@ LEFT JOIN sub2api_links l ON l.account_id = a.id
 LEFT JOIN jobs j ON j.id = (
   SELECT latest.id FROM jobs latest
   WHERE latest.account_id = a.id AND latest.type = 'authorize'
+  ORDER BY latest.created_at DESC LIMIT 1
+)
+LEFT JOIN jobs tj ON tj.id = (
+  SELECT latest.id FROM jobs latest
+  WHERE latest.account_id = a.id AND latest.type = 'rotate_totp'
   ORDER BY latest.created_at DESC LIMIT 1
 )
 `
@@ -199,16 +210,35 @@ export class AccountRepository {
     return this.get(accountId)!
   }
 
-  rotateTotpSecret(accountId: string, newSecret: string): ManagedAccount {
+  stageTotpSecret(accountId: string, newSecret: string): void {
     const transaction = this.db.transaction(() => {
-      const row = this.db.prepare('SELECT totp_secret_id FROM managed_accounts WHERE id = ? AND deleted_at IS NULL')
-        .get(accountId) as { totp_secret_id: string | null } | undefined
+      const row = this.db.prepare('SELECT totp_secret_id, totp_pending_secret_id FROM managed_accounts WHERE id = ? AND deleted_at IS NULL')
+        .get(accountId) as { totp_secret_id: string | null; totp_pending_secret_id: string | null } | undefined
       if (!row?.totp_secret_id) throw new Error('ACCOUNT_SECRETS_MISSING')
       if (this.readSecret(row.totp_secret_id) === newSecret) throw new Error('2FA 密钥与当前密钥相同')
-      this.updateSecret(row.totp_secret_id, newSecret)
+      const secretId = this.insertSecret('openai_totp_pending', newSecret)
+      this.db.prepare('UPDATE managed_accounts SET totp_pending_secret_id = ?, updated_at = ? WHERE id = ?')
+        .run(secretId, now(), accountId)
+      if (row.totp_pending_secret_id) this.db.prepare('DELETE FROM secret_blobs WHERE id = ?').run(row.totp_pending_secret_id)
+    })
+    transaction()
+  }
+
+  getPendingTotpSecret(accountId: string): string | null {
+    const row = this.db.prepare('SELECT totp_pending_secret_id FROM managed_accounts WHERE id = ? AND deleted_at IS NULL')
+      .get(accountId) as { totp_pending_secret_id: string | null } | undefined
+    return row?.totp_pending_secret_id ? this.readSecret(row.totp_pending_secret_id) : null
+  }
+
+  promoteStagedTotpSecret(accountId: string): ManagedAccount {
+    const transaction = this.db.transaction(() => {
+      const row = this.db.prepare('SELECT totp_secret_id, totp_pending_secret_id FROM managed_accounts WHERE id = ? AND deleted_at IS NULL')
+        .get(accountId) as { totp_secret_id: string | null; totp_pending_secret_id: string | null } | undefined
+      if (!row?.totp_pending_secret_id) throw new Error('TOTP_PENDING_SECRET_MISSING')
       const timestamp = now()
-      this.db.prepare('UPDATE managed_accounts SET totp_rotated_at = ?, updated_at = ? WHERE id = ?')
-        .run(timestamp, timestamp, accountId)
+      this.db.prepare('UPDATE managed_accounts SET totp_secret_id = ?, totp_pending_secret_id = NULL, totp_rotated_at = ?, updated_at = ? WHERE id = ?')
+        .run(row.totp_pending_secret_id, timestamp, timestamp, accountId)
+      if (row.totp_secret_id) this.db.prepare('DELETE FROM secret_blobs WHERE id = ?').run(row.totp_secret_id)
     })
     transaction()
     return this.get(accountId)!
@@ -217,20 +247,20 @@ export class AccountRepository {
   hardDelete(accountId: string): void {
     const transaction = this.db.transaction(() => {
       const row = this.db.prepare(`
-        SELECT password_secret_id, totp_secret_id FROM managed_accounts WHERE id = ?
-      `).get(accountId) as { password_secret_id: string | null; totp_secret_id: string | null } | undefined
+        SELECT password_secret_id, totp_secret_id, totp_pending_secret_id FROM managed_accounts WHERE id = ?
+      `).get(accountId) as { password_secret_id: string | null; totp_secret_id: string | null; totp_pending_secret_id: string | null } | undefined
       if (!row) throw new Error('ACCOUNT_NOT_FOUND')
 
       this.db.prepare('DELETE FROM managed_accounts WHERE id = ?').run(accountId)
-      const secretIds = [row.password_secret_id, row.totp_secret_id].filter((value): value is string => Boolean(value))
+      const secretIds = [row.password_secret_id, row.totp_secret_id, row.totp_pending_secret_id].filter((value): value is string => Boolean(value))
       for (const secretId of secretIds) {
         this.db.prepare(`
           DELETE FROM secret_blobs
           WHERE id = ? AND NOT EXISTS (
             SELECT 1 FROM managed_accounts
-            WHERE password_secret_id = ? OR totp_secret_id = ?
+            WHERE password_secret_id = ? OR totp_secret_id = ? OR totp_pending_secret_id = ?
           )
-        `).run(secretId, secretId, secretId)
+        `).run(secretId, secretId, secretId, secretId)
       }
     })
     transaction()
@@ -373,7 +403,7 @@ export class AccountRepository {
   }
 }
 
-export type JobType = 'authorize' | 'refresh' | 'health_test'
+export type JobType = 'authorize' | 'refresh' | 'health_test' | 'rotate_totp'
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed'
 
 export interface WorkbenchJob {

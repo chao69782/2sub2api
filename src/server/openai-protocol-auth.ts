@@ -3,6 +3,7 @@ import { SENTINEL_SV, type FingerprintSession } from './browser-fingerprint.js'
 import { chromeRequest } from './chrome-http.js'
 import { CookieJar } from './cookie-jar.js'
 import { ManualActionRequiredError } from './openai-auth-errors.js'
+import { normalizeTotpSecret } from './import-parser.js'
 import { buildSentinelHeaders, sentinelReqBody, sentinelRequestProof } from './sentinel-client.js'
 
 export interface ProtocolAuthInput {
@@ -304,7 +305,7 @@ async function requestSentinel(client: AuthHttpClient, session: FingerprintSessi
     challenge,
     flow,
     session,
-    cookie: client.cookies.snapshot()
+    cookie: client.cookies.header('https://auth.openai.com/')
   })
 }
 
@@ -367,11 +368,13 @@ function collectWorkspaces(client: AuthHttpClient, ...payloads: Array<JsonRecord
   return [...unique.values()]
 }
 
-export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<string> {
-  const cookies = new CookieJar()
-  cookies.applySetCookie(`oai-did=${input.session.deviceId}; Domain=.openai.com; Path=/`, 'https://auth.openai.com/')
-  cookies.applySetCookie(`oai-locale=${input.session.profile.navigatorLanguage}; Domain=.openai.com; Path=/`, 'https://auth.openai.com/')
-  const client = new AuthHttpClient(input.session, cookies)
+async function authenticateCredentials(input: ProtocolAuthInput, client: AuthHttpClient): Promise<{
+  continueUrl: string
+  result: JsonRecord
+  emailResult: JsonRecord
+  passwordResult: JsonRecord
+  mfaVerified: boolean
+}> {
   console.info(`[sentinel] protocol authorize start device_id=${input.session.deviceId.slice(0, 12)} ua=${input.session.profile.userAgent.slice(0, 72)}`)
 
   const authPage = await client.follow(input.authUrl, client.navigateHeaders(''))
@@ -410,6 +413,7 @@ export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<s
   }
   let continueUrl = extractContinueUrl(passwordResult.json)
   let result = passwordResult.json
+  let mfaVerified = false
   if (isEmailOtpStep(result, continueUrl)) {
     throw new ManualActionRequiredError('密码验证后要求邮箱验证码，本工作台只支持邮箱+密码+2FA')
   }
@@ -432,8 +436,9 @@ export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<s
       `https://auth.openai.com/mfa-challenge/${factorId}`
     )
     if (verified.status >= 400) {
-      throw new ManualActionRequiredError(`2FA 验证失败（HTTP ${verified.status}）：${verified.text.slice(0, 220)}`)
+      throw new ManualActionRequiredError(`2FA 验证失败（HTTP ${verified.status}）`, 'MFA_VERIFICATION_FAILED')
     }
+    mfaVerified = true
     continueUrl = extractContinueUrl(verified.json) || continueUrl
     result = verified.json
   }
@@ -442,7 +447,21 @@ export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<s
   }
   if (!continueUrl.startsWith('http')) continueUrl = `https://auth.openai.com${continueUrl}`
   ingestAuthSessionCookie(client, result)
-  const knownWorkspaces = collectWorkspaces(client, result, emailResult.json, passwordResult.json)
+  return { continueUrl, result, emailResult: emailResult.json, passwordResult: passwordResult.json, mfaVerified }
+}
+
+function newAuthClient(session: FingerprintSession): AuthHttpClient {
+  const cookies = new CookieJar()
+  cookies.applySetCookie(`oai-did=${session.deviceId}; Domain=.openai.com; Path=/`, 'https://auth.openai.com/')
+  cookies.applySetCookie(`oai-did=${session.deviceId}; Domain=chatgpt.com; Path=/`, 'https://chatgpt.com/')
+  cookies.applySetCookie(`oai-locale=${session.profile.navigatorLanguage}; Domain=.openai.com; Path=/`, 'https://auth.openai.com/')
+  return new AuthHttpClient(session, cookies)
+}
+
+export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<string> {
+  const client = newAuthClient(input.session)
+  const { continueUrl, result, emailResult, passwordResult } = await authenticateCredentials(input, client)
+  const knownWorkspaces = collectWorkspaces(client, result, emailResult, passwordResult)
   if (knownWorkspaces.length > 0 && !pickPreferredWorkspace(knownWorkspaces)) {
     throw new ManualActionRequiredError('未检测到组织空间（Team），仅检测到个人空间或其他 workspace，未导入 Sub2API', 'PERSONAL_WORKSPACE_ONLY')
   }
@@ -455,8 +474,8 @@ export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<s
     const workspaces = collectWorkspaces(
       client,
       result,
-      emailResult.json,
-      passwordResult.json,
+      emailResult,
+      passwordResult,
       afterLogin.text,
       listed?.json() ?? null
     )
@@ -483,4 +502,148 @@ export async function authorizeWithSentinel(input: ProtocolAuthInput): Promise<s
     if (isCallbackUrl(afterLogin.url)) return afterLogin.url
   }
   throw new ManualActionRequiredError(`未拿到 OAuth 回调：${afterLogin.url}`)
+}
+
+interface ChatGptSession {
+  client: AuthHttpClient
+  accessToken: string
+  mfaVerified: boolean
+}
+
+async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<ChatGptSession> {
+  const client = newAuthClient(input.session)
+  const csrf = await client.request('https://chatgpt.com/api/auth/csrf', {
+    headers: { ...client.navigateHeaders(), accept: 'application/json' }
+  })
+  const csrfToken = csrf.json().csrfToken
+  if (csrf.status !== 200 || typeof csrfToken !== 'string' || !csrfToken) {
+    throw new ManualActionRequiredError('无法初始化 ChatGPT 登录会话', 'CHATGPT_SESSION_FAILED')
+  }
+  const form = new URLSearchParams({ csrfToken, callbackUrl: 'https://chatgpt.com/', json: 'true' })
+  const signIn = await client.request('https://chatgpt.com/api/auth/signin/openai', {
+    method: 'POST',
+    headers: {
+      ...client.navigateHeaders('https://chatgpt.com/auth/login'),
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+      origin: 'https://chatgpt.com',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-site': 'same-origin'
+    },
+    body: form.toString()
+  })
+  const authUrl = signIn.json().url
+  if (signIn.status !== 200 || typeof authUrl !== 'string' || !authUrl.startsWith('https://auth.openai.com/api/accounts/authorize?')) {
+    throw new ManualActionRequiredError('无法取得 ChatGPT 登录地址', 'CHATGPT_SESSION_FAILED')
+  }
+  const loginDeviceId = new URL(authUrl).searchParams.get('device_id')
+  if (loginDeviceId && /^[0-9a-f-]{36}$/i.test(loginDeviceId)) {
+    input.session.deviceId = loginDeviceId
+    client.cookies.applySetCookie(`oai-did=${loginDeviceId}; Domain=.openai.com; Path=/`, 'https://auth.openai.com/')
+  }
+  const { continueUrl, mfaVerified } = await authenticateCredentials({ ...input, authUrl }, client)
+  const completed = await client.follow(continueUrl, client.navigateHeaders('https://auth.openai.com/log-in/password'), 20)
+  if (completed.status >= 400 || !completed.url.startsWith('https://chatgpt.com/')) {
+    throw new ManualActionRequiredError(`ChatGPT 登录未完成（HTTP ${completed.status}）`, 'CHATGPT_SESSION_FAILED')
+  }
+  const sessionResponse = await client.request('https://chatgpt.com/api/auth/session', {
+    headers: { ...client.navigateHeaders('https://chatgpt.com/'), accept: 'application/json' }
+  })
+  const session = sessionResponse.json()
+  const accessToken = session.accessToken
+  const userEmail = asRecord(session.user).email
+  if (sessionResponse.status !== 200 || typeof accessToken !== 'string' || !accessToken) {
+    throw new ManualActionRequiredError('ChatGPT 登录后未取得会话令牌', 'CHATGPT_SESSION_FAILED')
+  }
+  if (typeof userEmail === 'string' && userEmail.toLowerCase() !== input.email.toLowerCase()) {
+    throw new ManualActionRequiredError('ChatGPT 登录到了不同的账号，已停止更换 2FA', 'CHATGPT_ACCOUNT_MISMATCH')
+  }
+  return { client, accessToken, mfaVerified }
+}
+
+interface MfaApiResponse { status: number; json: JsonRecord }
+
+async function mfaApi(session: ChatGptSession, path: string, body?: JsonRecord): Promise<MfaApiResponse> {
+  const response = await session.client.request(`https://chatgpt.com/backend-api${path}`, {
+    method: body ? 'POST' : 'GET',
+    headers: {
+      ...session.client.navigateHeaders('https://chatgpt.com/#settings/Security'),
+      accept: 'application/json',
+      authorization: `Bearer ${session.accessToken}`,
+      ...(body ? {
+        'content-type': 'application/json',
+        origin: 'https://chatgpt.com',
+        'sec-fetch-site': 'same-origin',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-dest': 'empty'
+      } : {})
+    },
+    ...(body ? { body: JSON.stringify(body) } : {})
+  })
+  return { status: response.status, json: response.json() }
+}
+
+function totpFactorIds(info: JsonRecord): string[] {
+  const values = asRecord(info.factors).totp
+  if (values == null && info.mfa_enabled_v2 === false) return []
+  if (!Array.isArray(values)) throw new ManualActionRequiredError('OpenAI 未返回 2FA 验证器列表', 'MFA_INFO_INVALID')
+  const ids = values.map((factor) => asRecord(factor).id)
+  if (ids.some((id) => typeof id !== 'string' || !id)) {
+    throw new ManualActionRequiredError('OpenAI 返回的 2FA 验证器缺少 ID', 'MFA_INFO_INVALID')
+  }
+  return ids as string[]
+}
+
+export async function rotateTotpInAuthenticatedSession(
+  api: (path: string, body?: JsonRecord) => Promise<MfaApiResponse>,
+  stageSecret: (secret: string) => void
+): Promise<void> {
+  const info = await api('/accounts/mfa_info')
+  if (info.status !== 200) throw new ManualActionRequiredError(`读取 OpenAI 2FA 状态失败（HTTP ${info.status}）`, 'MFA_INFO_FAILED')
+  const existingIds = totpFactorIds(info.json)
+  if (existingIds.length > 1) throw new ManualActionRequiredError('账号存在多个验证器，无法确定要替换的 2FA', 'MULTIPLE_TOTP_FACTORS')
+  if (existingIds.length === 1) {
+    const disabled = await api('/accounts/mfa/user/disable_in_house', { factor_id: existingIds[0] })
+    if (disabled.status >= 400) throw new ManualActionRequiredError(`停用旧 2FA 失败（HTTP ${disabled.status}）`, 'MFA_DISABLE_FAILED')
+  }
+  const enrollment = await api('/accounts/mfa/enroll', { factor_type: 'totp', source: 'settings' })
+  const sessionId = enrollment.json.session_id
+  const secret = typeof enrollment.json.secret === 'string' ? normalizeTotpSecret(enrollment.json.secret) : null
+  if (enrollment.status >= 400 || typeof sessionId !== 'string' || !secret) {
+    throw new ManualActionRequiredError('创建新 2FA 失败；请立即重试更换操作', 'MFA_ENROLL_FAILED')
+  }
+  stageSecret(secret)
+  const activated = await api('/accounts/mfa/user/activate_enrollment', {
+    code: authenticator.generate(secret), factor_type: 'totp', session_id: sessionId, source: 'settings'
+  })
+  if (activated.status >= 400) {
+    throw new ManualActionRequiredError(`新 2FA 激活失败（HTTP ${activated.status}）；请重试更换操作`, 'MFA_ACTIVATE_FAILED')
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const verified = await api('/accounts/mfa_info')
+    if (verified.status === 200 && verified.json.mfa_enabled_v2 === true) {
+      const factorIds = totpFactorIds(verified.json)
+      if (factorIds.length === 1 && !existingIds.includes(factorIds[0]!)) return
+    }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 400))
+  }
+  throw new ManualActionRequiredError('新 2FA 激活结果尚未确认；请重试更换操作', 'MFA_CONFIRM_FAILED')
+}
+
+export async function rotateTotpWithSentinel(input: Omit<ProtocolAuthInput, 'authUrl'> & {
+  pendingTotpSecret?: string | null
+  stageSecret: (secret: string) => void
+}): Promise<void> {
+  let session: ChatGptSession | null = null
+  if (input.pendingTotpSecret) {
+    try {
+      session = await loginChatGpt({ ...input, totpSecret: input.pendingTotpSecret })
+      if (session.mfaVerified) return
+    } catch (error) {
+      if (!(error instanceof ManualActionRequiredError && error.code === 'MFA_VERIFICATION_FAILED')) throw error
+    }
+  }
+  session ??= await loginChatGpt(input)
+  await rotateTotpInAuthenticatedSession((path, body) => mfaApi(session, path, body), input.stageSecret)
 }

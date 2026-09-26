@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS managed_accounts (
   desired_remote_name TEXT,
   password_secret_id TEXT,
   totp_secret_id TEXT,
+  totp_pending_secret_id TEXT,
   totp_rotated_at TEXT,
   notes TEXT NOT NULL DEFAULT '',
   tags_json TEXT NOT NULL DEFAULT '[]',
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS managed_accounts (
   updated_at TEXT NOT NULL,
   deleted_at TEXT,
   FOREIGN KEY(password_secret_id) REFERENCES secret_blobs(id),
-  FOREIGN KEY(totp_secret_id) REFERENCES secret_blobs(id)
+  FOREIGN KEY(totp_secret_id) REFERENCES secret_blobs(id),
+  FOREIGN KEY(totp_pending_secret_id) REFERENCES secret_blobs(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS managed_accounts_email_active
   ON managed_accounts(email_normalized) WHERE deleted_at IS NULL;
@@ -163,6 +165,9 @@ export function openDatabase(dataDir: string): Database.Database {
   if (!accountColumns.has('totp_rotated_at')) {
     db.exec('ALTER TABLE managed_accounts ADD COLUMN totp_rotated_at TEXT')
   }
+  if (!accountColumns.has('totp_pending_secret_id')) {
+    db.exec('ALTER TABLE managed_accounts ADD COLUMN totp_pending_secret_id TEXT')
+  }
   const rollbackProfitFeature = db.transaction(() => {
     db.exec(`
       DROP TABLE IF EXISTS profit_limit_states;
@@ -178,21 +183,21 @@ export function openDatabase(dataDir: string): Database.Database {
   rollbackProfitFeature()
   const purgeLegacySoftDeletes = db.transaction(() => {
     const rows = db.prepare(`
-      SELECT password_secret_id, totp_secret_id
+      SELECT password_secret_id, totp_secret_id, totp_pending_secret_id
       FROM managed_accounts WHERE deleted_at IS NOT NULL
-    `).all() as Array<{ password_secret_id: string | null; totp_secret_id: string | null }>
+    `).all() as Array<{ password_secret_id: string | null; totp_secret_id: string | null; totp_pending_secret_id: string | null }>
     if (!rows.length) return
     db.prepare('DELETE FROM managed_accounts WHERE deleted_at IS NOT NULL').run()
     for (const row of rows) {
-      for (const secretId of [row.password_secret_id, row.totp_secret_id]) {
+      for (const secretId of [row.password_secret_id, row.totp_secret_id, row.totp_pending_secret_id]) {
         if (!secretId) continue
         db.prepare(`
           DELETE FROM secret_blobs
           WHERE id = ? AND NOT EXISTS (
             SELECT 1 FROM managed_accounts
-            WHERE password_secret_id = ? OR totp_secret_id = ?
+            WHERE password_secret_id = ? OR totp_secret_id = ? OR totp_pending_secret_id = ?
           )
-        `).run(secretId, secretId, secretId)
+        `).run(secretId, secretId, secretId, secretId)
       }
     }
   })

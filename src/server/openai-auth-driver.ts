@@ -1,6 +1,6 @@
 import { createFingerprintSession, fingerprintSummaryText, validateBrowserProfile } from './browser-fingerprint.js'
 import { ManualActionRequiredError } from './openai-auth-errors.js'
-import { authorizeWithSentinel } from './openai-protocol-auth.js'
+import { authorizeWithSentinel, rotateTotpWithSentinel } from './openai-protocol-auth.js'
 
 export { ManualActionRequiredError }
 
@@ -27,6 +27,25 @@ export class OpenAIAuthDriver {
         totpSecret: input.totpSecret,
         session: fingerprint
       })
+    } finally {
+      this.busy = false
+    }
+  }
+
+  async rotateTotp(input: {
+    email: string
+    password: string
+    totpSecret: string
+    pendingTotpSecret: string | null
+    stageSecret: (secret: string) => void
+  }): Promise<void> {
+    if (this.busy) throw new Error('AUTH_BROWSER_BUSY')
+    this.busy = true
+    try {
+      const fingerprint = createFingerprintSession(input.email, null, 'macOS')
+      const issues = validateBrowserProfile(fingerprint.profile)
+      if (issues.length) console.warn(`[fingerprint] ${issues.join('; ')}`)
+      await rotateTotpWithSentinel({ ...input, session: fingerprint })
     } finally {
       this.busy = false
     }

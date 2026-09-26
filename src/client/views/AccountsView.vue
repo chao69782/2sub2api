@@ -75,7 +75,7 @@
             <div class="min-w-0">
               <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
               <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
-              <div v-if="!account.sub2apiAccountId && !account.totpRotatedAt" class="mt-1 text-xs font-medium text-amber-700">首次授权前需更新 2FA</div>
+              <div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div>
             </div>
             <dl class="grid grid-cols-3 gap-2 text-xs">
               <div><dt class="mb-1 text-slate-500">自动重授权次数</dt><dd>{{ account.autoReauthorizationCount }}</dd></div>
@@ -98,15 +98,15 @@
             <div class="text-xs text-slate-500">最近检查：{{ formatTime(account.lastCheckAt) }}</div>
             <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-              <button class="icon-button" title="更新 2FA" aria-label="更新 2FA" @click="openTotpUpdate(account)"><KeyRound :size="16" /></button>
-              <button class="icon-button" :title="!account.sub2apiAccountId && !account.totpRotatedAt ? '请先更新 2FA' : '自动授权或重新授权'" aria-label="自动授权或重新授权" :disabled="!account.sub2apiAccountId && !account.totpRotatedAt" @click="openAuthorization(account)"><Bot :size="16" /></button>
+              <button class="button" title="自动更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" />更换 2FA</button>
+              <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
               <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
             </div>
           </article>
         </div>
         <div class="hidden overflow-x-auto md:block">
-        <table class="min-w-[1520px] w-full table-fixed text-left text-sm">
+        <table class="min-w-[1580px] w-full table-fixed text-left text-sm">
           <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
               <th class="w-[54px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
@@ -118,13 +118,13 @@
               <th class="w-[112px] px-2 py-3 text-center">健康</th>
               <th class="w-[100px] px-4 py-3 text-center">同步</th>
               <th class="w-[150px] px-4 py-3">最近检查</th>
-              <th class="sticky right-0 z-20 w-[270px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
+              <th class="sticky right-0 z-20 w-[330px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50">
               <td class="px-4 py-3"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /></td>
-              <td class="truncate px-4 py-3 font-medium" :title="account.email">{{ account.email }}<div v-if="!account.sub2apiAccountId && !account.totpRotatedAt" class="mt-1 text-xs font-medium text-amber-700">首次授权前需更新 2FA</div></td>
+              <td class="truncate px-4 py-3 font-medium" :title="account.email">{{ account.email }}<div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div></td>
               <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}</td>
               <td class="px-4 py-3" :title="authorizationResult(account).title">
                 <div class="font-medium" :class="authorizationResult(account).tone">{{ authorizationResult(account).label }}</div>
@@ -153,8 +153,8 @@
               <td class="sticky right-0 z-10 border-l border-slate-200 bg-white px-4 py-3 group-hover:bg-slate-50">
                 <div class="flex justify-end gap-1">
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-                  <button class="icon-button" title="更新 2FA" aria-label="更新 2FA" @click="openTotpUpdate(account)"><KeyRound :size="16" /></button>
-                  <button class="icon-button" :title="!account.sub2apiAccountId && !account.totpRotatedAt ? '请先更新 2FA' : '自动授权或重新授权'" aria-label="自动授权或重新授权" :disabled="!account.sub2apiAccountId && !account.totpRotatedAt" @click="openAuthorization(account)"><Bot :size="16" /></button>
+                  <button class="button" title="自动更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" />更换 2FA</button>
+                  <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
                   <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
                 </div>
@@ -218,22 +218,6 @@
         <div><label class="label" for="credentialTotp">2FA 密钥</label><input id="credentialTotp" class="input font-mono" :value="credentials.totpSecret" readonly autocomplete="off" /></div>
         <div class="flex justify-end"><button class="button" type="button" @click="credentialsOpen = false">关闭</button></div>
       </div>
-    </ModalDialog>
-
-    <ModalDialog v-model:open="totpOpen" title="更新 2FA 密钥" width="max-w-lg">
-      <form class="space-y-4" @submit.prevent="saveTotpUpdate">
-        <p class="text-sm text-slate-700">{{ totpAccountEmail }}</p>
-        <ol class="list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-600">
-          <li>先在 OpenAI 账号安全设置中手动更换验证器。</li>
-          <li>复制新验证器的密钥，并确认它已在 OpenAI 生效。</li>
-          <li>在下方填写新密钥和验证器当前显示的 6 位验证码，再保存。</li>
-        </ol>
-        <div><label class="label" for="newTotpSecret">新 2FA 密钥</label><input id="newTotpSecret" v-model="totpForm.secret" class="input font-mono" type="password" autocomplete="off" required /></div>
-        <div><label class="label" for="newTotpCode">当前验证码</label><input id="newTotpCode" v-model="totpForm.code" class="input font-mono" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required /></div>
-        <label class="flex items-start gap-2 text-sm text-slate-700"><input v-model="totpForm.confirmed" class="mt-1" type="checkbox" required />我已在 OpenAI 完成修改，新密钥可以用于登录</label>
-        <div v-if="totpError" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ totpError }}</div>
-        <div class="flex justify-end gap-2"><button type="button" class="button" @click="totpOpen = false">取消</button><button class="button button-primary" :disabled="totpSaving || !totpForm.confirmed">{{ totpSaving ? '保存中…' : '保存新密钥' }}</button></div>
-      </form>
     </ModalDialog>
 
     <ModalDialog v-model:open="authOpen" title="自动授权" width="max-w-4xl">
@@ -379,15 +363,6 @@ const credentials = ref<{ email: string; password: string; totpSecret: string } 
 watch(credentialsOpen, (open) => {
   if (!open) credentials.value = null
 })
-const totpOpen = ref(false)
-const totpSaving = ref(false)
-const totpAccountId = ref('')
-const totpAccountEmail = ref('')
-const totpError = ref('')
-const totpForm = ref({ secret: '', code: '', confirmed: false })
-watch(totpOpen, (open) => {
-  if (!open) totpForm.value = { secret: '', code: '', confirmed: false }
-})
 const authOpen = ref(false)
 const authAccountId = ref('')
 const authSub2apiName = ref('')
@@ -522,23 +497,18 @@ async function openCredentials(account: ManagedAccount) {
   } catch (e) { setResult(e instanceof Error ? e.message : '读取凭据失败', true) }
 }
 async function saveEdit() { try { const body = { ...editForm.value }; if (!body.password) delete (body as Partial<typeof body>).password; await api.updateAccount(editingId.value, body); editOpen.value = false; setResult('账号已更新'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '保存失败', true) } }
-function openTotpUpdate(account: ManagedAccount) {
-  totpAccountId.value = account.id
-  totpAccountEmail.value = account.email
-  totpForm.value = { secret: '', code: '', confirmed: false }
-  totpError.value = ''
-  totpOpen.value = true
+function totpRotationLabel(account: ManagedAccount): string {
+  if (account.totpRotationStatus === 'pending') return '2FA 更换：等待执行'
+  if (account.totpRotationStatus === 'running') return '2FA 更换：进行中'
+  if (account.totpRotationStatus === 'failed') return `2FA 更换失败：${account.totpRotationError || '请重试'}`
+  return `2FA 已更换：${formatTime(account.totpRotatedAt)}`
 }
-async function saveTotpUpdate() {
-  totpSaving.value = true
-  totpError.value = ''
+async function startTotpRotation(account: ManagedAccount) {
   try {
-    await api.rotateTotp(totpAccountId.value, totpForm.value.secret, totpForm.value.code)
-    totpForm.value = { secret: '', code: '', confirmed: false }
-    totpOpen.value = false
-    setResult('新 2FA 密钥已加密保存，后续授权将使用新密钥')
+    await api.rotateTotp(account.id)
+    setResult(`${account.email} 的 2FA 更换任务已开始`)
     await load()
-  } catch (e) { totpError.value = e instanceof Error ? e.message : '保存失败' } finally { totpSaving.value = false }
+  } catch (e) { setResult(e instanceof Error ? e.message : '启动 2FA 更换失败', true) }
 }
 async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); selectedIds.value = selectedIds.value.filter((id) => id !== account.id); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
 function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
