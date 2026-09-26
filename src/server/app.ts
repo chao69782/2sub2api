@@ -178,7 +178,7 @@ function summarizeAccountUsage(accounts: ManagedAccount[]): AccountUsageSummary 
     eligibleAccountCount: eligibleAccounts.length,
     fiveHour: summarizeUsageWindow(eligibleAccounts, 'usageFiveHourPercent'),
     sevenDay: summarizeUsageWindow(eligibleAccounts, 'usageSevenDayPercent'),
-    availability: estimateAccountUsageAvailability(eligibleAccounts)
+    availability: estimateAccountUsageAvailability(eligibleAccounts.filter((account) => account.healthStatus === 'healthy'))
   }
 }
 

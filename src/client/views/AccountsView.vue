@@ -23,7 +23,7 @@
       <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 id="usage-summary-title" class="text-sm font-semibold text-slate-900">总体用量窗口</h2>
-          <p class="mt-1 text-xs leading-5 text-slate-500">仅统计 5 小时和 7 天窗口均未达到 100% 的账号；未查询的窗口不参与平均。</p>
+          <p class="mt-1 text-xs leading-5 text-slate-500">用量均值仅统计 5 小时和 7 天窗口均未达到 100% 的账号；未查询的窗口不参与平均。预计剩余可用时间仅统计其中健康的账号。</p>
         </div>
         <span v-if="usageSummary" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
       </div>

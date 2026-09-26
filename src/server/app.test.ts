@@ -181,7 +181,7 @@ describe('account usage summary', () => {
     })]).status).toBe('insufficient_data')
   })
 
-  it('excludes accounts with either exhausted window and ignores missing or non-finite values', async () => {
+  it('excludes exhausted windows from usage and unhealthy accounts from availability', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-usage-'))
     const appConfig = config(directory)
     const db = openDatabase(directory)
@@ -225,6 +225,7 @@ describe('account usage summary', () => {
       five_hour: { utilization: 12.5, remaining_seconds: 17_000 },
       seven_day: { utilization: 25, remaining_seconds: 500_000 }
     })
+    repository.markHealth(alpha.id, { status: 'healthy' })
     repository.linkRemote(beta.id, { id: 102, name: 'beta' }, null)
     repository.syncRemote(beta.id, { id: 102, five_hour: { utilization: 100 }, seven_day: { utilization: 50 } })
     repository.linkRemote(delta.id, { id: 103, name: 'delta' }, null)
@@ -233,7 +234,8 @@ describe('account usage summary', () => {
     repository.linkRemote(epsilon.id, { id: 104, name: 'epsilon' }, null)
     repository.syncRemote(epsilon.id, { id: 104, five_hour: { utilization: 30 }, seven_day: { utilization: 100 } })
     repository.linkRemote(zeta.id, { id: 105, name: 'zeta' }, null)
-    repository.syncRemote(zeta.id, { id: 105, five_hour: { utilization: 30 }, seven_day: null })
+    repository.syncRemote(zeta.id, { id: 105, five_hour: { utilization: 30, remaining_seconds: 9_000 }, seven_day: null })
+    repository.markHealth(zeta.id, { status: 'network_error', summary: '网络错误' })
 
     const all = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
     expect(all.statusCode).toBe(200)
@@ -253,5 +255,12 @@ describe('account usage summary', () => {
     expect(searched.statusCode).toBe(200)
     expect(searched.json().items.map((account: { email: string }) => account.email)).toEqual(['alpha@example.com'])
     expect(searched.json().usageSummary).toEqual(all.json().usageSummary)
+
+    repository.markHealth(alpha.id, { status: 'network_error', summary: '网络错误' })
+    const allUnhealthy = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
+    expect(allUnhealthy.json().usageSummary.availability).toEqual({
+      status: 'insufficient_data', remainingSeconds: null, limitingWindow: null,
+      consumptionRatePercentPerHour: null, sampleCount: 0
+    })
   })
 })
