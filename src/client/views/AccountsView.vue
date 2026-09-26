@@ -3,15 +3,26 @@
     <div class="mb-4 flex flex-wrap items-center gap-3">
       <div>
         <h1 class="text-xl font-semibold">账号</h1>
-        <p class="mt-0.5 text-sm text-slate-500">{{ search.trim() ? `匹配 ${accounts.length} 个账号` : `共 ${accounts.length} 个账号` }}</p>
+        <p class="mt-0.5 text-sm text-slate-500">{{ hasListFilter ? `匹配 ${total} 个账号` : `共 ${total} 个账号` }}</p>
       </div>
       <div class="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
         <div class="relative w-full sm:w-auto">
           <Search class="pointer-events-none absolute left-3 top-3.5 text-slate-400" :size="17" />
           <input v-model="search" class="input w-full pl-9 sm:w-64" placeholder="搜索邮箱" @input="debouncedLoad" />
         </div>
+        <select v-model="healthStatusFilter" class="input w-full sm:w-36" aria-label="按账号状态筛选" @change="resetPageAndLoad">
+          <option value="">全部状态</option>
+          <option value="healthy">健康</option>
+          <option value="unknown">未知</option>
+          <option value="degraded">异常</option>
+          <option value="rate_limited">限流</option>
+          <option value="invalid_credentials">凭据失效</option>
+          <option value="upstream_blocked">上游阻止</option>
+          <option value="network_error">网络错误</option>
+        </select>
         <button class="button button-primary" @click="openImport"><Plus :size="17" />添加账号</button>
         <button class="button" title="导出选中的账号---密码---2FA" :disabled="!selectedIds.length" @click="api.exportAccounts(selectedIds)"><Download :size="17" />导出选中 ({{ selectedIds.length }})</button>
+        <button v-if="selectedIds.length" class="button" type="button" @click="selectedIds = []">清空选择</button>
         <button class="icon-button" title="刷新列表" aria-label="刷新列表" @click="load"><RefreshCw :size="17" /></button>
       </div>
     </div>
@@ -56,13 +67,13 @@
       <div v-if="loading" class="flex h-48 items-center justify-center text-slate-500"><LoaderCircle class="animate-spin" :size="22" /></div>
       <div v-else-if="!accounts.length" class="flex h-48 flex-col items-center justify-center text-slate-500">
         <Users :size="28" class="mb-2" />
-        <span>暂无账号</span>
+        <span>{{ hasListFilter ? '没有符合条件的账号' : '暂无账号' }}</span>
       </div>
       <div v-else>
         <div class="divide-y divide-slate-200 md:hidden">
           <article v-for="account in accounts" :key="account.id" class="space-y-3 p-4">
             <div class="min-w-0">
-              <div class="truncate font-medium" :title="account.email">{{ account.email }}</div>
+              <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
               <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
             </div>
             <dl class="grid grid-cols-3 gap-2 text-xs">
@@ -147,6 +158,18 @@
         </table>
         </div>
       </div>
+      <nav v-if="!loading && total > 0" class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm text-slate-600" aria-label="账号列表分页">
+        <span>显示 {{ pageStart }}–{{ pageEnd }} / {{ total }} 个账号</span>
+        <div class="flex flex-wrap items-center gap-2">
+          <label for="account-page-size">每页</label>
+          <select id="account-page-size" v-model.number="pageSize" class="input w-20" @change="resetPageAndLoad"><option :value="20">20</option><option :value="50">50</option><option :value="100">100</option></select>
+          <button class="button" type="button" :disabled="page <= 1" @click="changePage(1)">首页</button>
+          <button class="button" type="button" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button>
+          <span class="whitespace-nowrap tabular-nums">{{ page }} / {{ totalPages }} 页</span>
+          <button class="button" type="button" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button>
+          <button class="button" type="button" :disabled="page >= totalPages" @click="changePage(totalPages)">末页</button>
+        </div>
+      </nav>
     </div>
 
     <ModalDialog v-model:open="importOpen" title="添加账号" width="max-w-5xl">
@@ -256,7 +279,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Bot, Clock3, Download, LoaderCircle, Pencil, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
-import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
+import { displayHealthStatus } from '../../shared/account-status'
+import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
 import ModalDialog from '../components/ModalDialog.vue'
 import NullableNumberField from '../components/NullableNumberField.vue'
@@ -264,6 +288,13 @@ import NumberField from '../components/NumberField.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const accounts = ref<ManagedAccount[]>([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(20)
+const healthStatusFilter = ref<HealthStatus | ''>('')
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value + 1 : 0)
+const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
 const usageSummary = ref<AccountUsageSummary | null>(null)
 const usageWindows = computed(() => {
   const summary = usageSummary.value
@@ -303,6 +334,7 @@ const loading = ref(false)
 const importing = ref(false)
 const authorizing = ref(false)
 const search = ref('')
+const hasListFilter = computed(() => Boolean(search.value.trim() || healthStatusFilter.value))
 const error = ref('')
 const message = ref('')
 const importOpen = ref(false)
@@ -330,6 +362,7 @@ const authOverrides = ref<AccountImportOverrides>({
 })
 let searchTimer: number | undefined
 let statusPollTimer: number | undefined
+let listRequestId = 0
 const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void pollStatuses() }
 
 function formatTime(value: string | null) { return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '-' }
@@ -358,9 +391,6 @@ function formatDuration(value: number): string {
   if (hours) return `${hours} 小时${minutes ? ` ${minutes} 分钟` : ''}`
   return `${minutes} 分钟`
 }
-function displayHealthStatus(account: ManagedAccount): string {
-  return Math.max(account.usageFiveHourPercent ?? 0, account.usageSevenDayPercent ?? 0) >= 100 ? 'rate_limited' : account.healthStatus
-}
 function authorizationResult(account: ManagedAccount) {
   const code = account.lastAuthorizationErrorCode
   const errorDetail = account.lastAuthorizationErrorSummary || '授权失败，未返回详细原因'
@@ -378,8 +408,31 @@ function authorizationResult(account: ManagedAccount) {
   return { label: '未执行', detail: '尚无授权记录', title: '尚无授权记录', tone: 'text-slate-600' }
 }
 function setResult(text: string, isError = false) { error.value = isError ? text : ''; message.value = isError ? '' : text }
-function toggleAll(event: Event) { const checked = (event.target as HTMLInputElement).checked; selectedIds.value = checked ? accounts.value.map((account) => account.id) : [] }
-async function load() { loading.value = true; try { const response = await api.listAccounts(search.value); accounts.value = response.items; usageSummary.value = response.usageSummary; selectedIds.value = selectedIds.value.filter((id) => accounts.value.some((account) => account.id === id)) } catch (e) { setResult(e instanceof Error ? e.message : '加载失败', true) } finally { loading.value = false } }
+function toggleAll(event: Event) {
+  const visibleIds = new Set(accounts.value.map((account) => account.id))
+  selectedIds.value = (event.target as HTMLInputElement).checked
+    ? [...new Set([...selectedIds.value, ...visibleIds])]
+    : selectedIds.value.filter((id) => !visibleIds.has(id))
+}
+async function refreshAccounts(showLoading: boolean) {
+  const requestId = ++listRequestId
+  if (showLoading) loading.value = true
+  try {
+    const response = await api.listAccounts({ search: search.value, status: healthStatusFilter.value, page: page.value, pageSize: pageSize.value })
+    if (requestId !== listRequestId) return
+    accounts.value = response.items
+    total.value = response.total
+    page.value = response.page
+    usageSummary.value = response.usageSummary
+  } catch (e) {
+    if (showLoading && requestId === listRequestId) setResult(e instanceof Error ? e.message : '加载失败', true)
+  } finally {
+    if (requestId === listRequestId) loading.value = false
+  }
+}
+async function load() { await refreshAccounts(true) }
+function resetPageAndLoad() { window.clearTimeout(searchTimer); page.value = 1; void load() }
+function changePage(nextPage: number) { if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return; page.value = nextPage; void load() }
 async function loadAuthorizationMetadata() {
   if (globalSettings.value && groupsMetadataLoaded && proxiesMetadataLoaded) return
   if (authorizationMetadataRequest) return authorizationMetadataRequest
@@ -412,14 +465,14 @@ async function loadAuthorizationMetadata() {
     authorizationMetadataRequest = null
   }
 }
-async function pollStatuses() { try { const response = await api.listAccounts(search.value); accounts.value = response.items; usageSummary.value = response.usageSummary } catch { /* Keep the current list during transient polling failures. */ } }
-function debouncedLoad() { window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
+async function pollStatuses() { if (!loading.value) await refreshAccounts(false) }
+function debouncedLoad() { page.value = 1; listRequestId += 1; loading.value = true; window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
 function openImport() { credentialText.value = ''; previewRows.value = []; importOpen.value = true }
 async function preview() { try { const response = await api.previewImport(credentialText.value); previewRows.value = response.rows } catch (e) { setResult(e instanceof Error ? e.message : '预检失败', true) } }
 async function submitImport() { importing.value = true; try { const result = await api.importAccounts(credentialText.value); importOpen.value = false; setResult(`已导入 ${result.created.length} 个账号${result.errors.length ? `，${result.errors.length} 行未导入` : ''}`); await load() } catch (e) { setResult(e instanceof Error ? e.message : '导入失败', true) } finally { importing.value = false } }
 function edit(account: ManagedAccount) { editingId.value = account.id; editForm.value = { email: account.email, notes: account.notes, password: '', totpSecret: '' }; editOpen.value = true }
 async function saveEdit() { try { const body = { ...editForm.value }; if (!body.password) delete (body as Partial<typeof body>).password; if (!body.totpSecret) delete (body as Partial<typeof body>).totpSecret; await api.updateAccount(editingId.value, body); editOpen.value = false; setResult('账号已更新'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '保存失败', true) } }
-async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
+async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); selectedIds.value = selectedIds.value.filter((id) => id !== account.id); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
 function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
   return {
     modelWhitelist: [...defaults.modelWhitelist], concurrency: defaults.concurrency, priority: defaults.priority,

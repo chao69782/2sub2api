@@ -68,6 +68,14 @@ export interface AccountUsageSummary {
   availability: UsageAvailabilityEstimate
 }
 
+export interface AccountListResponse {
+  items: ManagedAccount[]
+  total: number
+  page: number
+  pageSize: number
+  usageSummary: AccountUsageSummary
+}
+
 export interface ManagedAccount {
   id: string
   email: string

@@ -256,6 +256,22 @@ describe('account usage summary', () => {
     expect(searched.json().items.map((account: { email: string }) => account.email)).toEqual(['alpha@example.com'])
     expect(searched.json().usageSummary).toEqual(all.json().usageSummary)
 
+    const secondPage = await app.inject({ method: 'GET', url: '/api/accounts?page=2&pageSize=2', headers: { cookie: cookie! } })
+    expect(secondPage.json()).toMatchObject({ total: 6, page: 2, pageSize: 2 })
+    expect(secondPage.json().items).toHaveLength(2)
+    expect(secondPage.json().usageSummary).toEqual(all.json().usageSummary)
+
+    const rateLimited = await app.inject({ method: 'GET', url: '/api/accounts?status=rate_limited', headers: { cookie: cookie! } })
+    expect(rateLimited.json().items.map((account: { email: string }) => account.email).sort()).toEqual(['beta@example.com', 'delta@example.com', 'epsilon@example.com'])
+    expect(rateLimited.json().total).toBe(3)
+
+    const filtered = await app.inject({ method: 'GET', url: '/api/accounts?search=zeta&status=network_error&page=3&pageSize=2', headers: { cookie: cookie! } })
+    expect(filtered.json()).toMatchObject({ total: 1, page: 1, pageSize: 2 })
+    expect(filtered.json().items.map((account: { email: string }) => account.email)).toEqual(['zeta@example.com'])
+
+    const invalidPage = await app.inject({ method: 'GET', url: '/api/accounts?pageSize=101', headers: { cookie: cookie! } })
+    expect(invalidPage.statusCode).toBe(400)
+
     repository.markHealth(alpha.id, { status: 'network_error', summary: '网络错误' })
     const allUnhealthy = await app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: cookie! } })
     expect(allUnhealthy.json().usageSummary.availability).toEqual({

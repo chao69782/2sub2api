@@ -120,8 +120,8 @@ export class AccountRepository {
 
   list(search = ''): ManagedAccount[] {
     const query = search.trim()
-      ? `${accountSelect} WHERE a.deleted_at IS NULL AND a.email_display LIKE ? ORDER BY a.created_at DESC`
-      : `${accountSelect} WHERE a.deleted_at IS NULL ORDER BY a.created_at DESC`
+      ? `${accountSelect} WHERE a.deleted_at IS NULL AND a.email_display LIKE ? ORDER BY a.created_at DESC, a.id DESC`
+      : `${accountSelect} WHERE a.deleted_at IS NULL ORDER BY a.created_at DESC, a.id DESC`
     const rows = query.includes('LIKE')
       ? this.db.prepare(query).all(`%${search.trim()}%`)
       : this.db.prepare(query).all()

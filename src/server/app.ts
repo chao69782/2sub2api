@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
+import { displayHealthStatus } from '../shared/account-status.js'
 import type { AccountImportOverrides, AccountUsageSummary, ImportDefaults, ManagedAccount, RuntimeSettings, UsageAvailabilityEstimate, UsageWindowKind, UsageWindowSummary } from '../shared/types.js'
 import { AuthService } from './auth.js'
 import type { AppConfig } from './config.js'
@@ -352,11 +353,27 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     return { ok: true }
   })
 
-  app.get('/api/accounts', async (request) => {
-    const query = z.object({ search: z.string().optional() }).parse(request.query)
+  app.get('/api/accounts', async (request, reply) => {
+    const parsedQuery = z.object({
+      search: z.string().optional(),
+      status: z.enum(['unknown', 'healthy', 'degraded', 'rate_limited', 'invalid_credentials', 'upstream_blocked', 'network_error']).optional(),
+      page: z.coerce.number().int().min(1).optional().default(1),
+      pageSize: z.coerce.number().int().min(1).max(100).optional().default(20)
+    }).safeParse(request.query)
+    if (!parsedQuery.success) return reply.code(400).send({ code: 'INVALID_ACCOUNT_QUERY', message: '筛选或分页参数无效' })
+    const query = parsedQuery.data
     const allAccounts = accounts.list()
+    const matchingAccounts = allAccounts.filter((account) =>
+      (!query.search?.trim() || account.email.toLowerCase().includes(query.search.trim().toLowerCase())) &&
+      (!query.status || displayHealthStatus(account) === query.status)
+    )
+    const total = matchingAccounts.length
+    const page = Math.min(query.page, Math.max(1, Math.ceil(total / query.pageSize)))
     return {
-      items: query.search?.trim() ? accounts.list(query.search) : allAccounts,
+      items: matchingAccounts.slice((page - 1) * query.pageSize, page * query.pageSize),
+      total,
+      page,
+      pageSize: query.pageSize,
       usageSummary: summarizeAccountUsage(allAccounts)
     }
   })
