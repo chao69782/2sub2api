@@ -98,7 +98,7 @@
             <div class="text-xs text-slate-500">最近检查：{{ formatTime(account.lastCheckAt) }}</div>
             <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-              <button class="button" title="自动更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" />更换 2FA</button>
+              <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
               <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
               <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
@@ -106,7 +106,7 @@
           </article>
         </div>
         <div class="hidden overflow-x-auto md:block">
-        <table class="min-w-[1580px] w-full table-fixed text-left text-sm">
+        <table class="min-w-[1520px] w-full table-fixed text-left text-sm">
           <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
               <th class="w-[54px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
@@ -118,7 +118,7 @@
               <th class="w-[112px] px-2 py-3 text-center">健康</th>
               <th class="w-[100px] px-4 py-3 text-center">同步</th>
               <th class="w-[150px] px-4 py-3">最近检查</th>
-              <th class="sticky right-0 z-20 w-[330px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
+              <th class="sticky right-0 z-20 w-[270px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -153,7 +153,7 @@
               <td class="sticky right-0 z-10 border-l border-slate-200 bg-white px-4 py-3 group-hover:bg-slate-50">
                 <div class="flex justify-end gap-1">
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-                  <button class="button" title="自动更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" />更换 2FA</button>
+                  <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
                   <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>

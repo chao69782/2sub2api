@@ -510,6 +510,39 @@ interface ChatGptSession {
   mfaVerified: boolean
 }
 
+export async function finishChatGptOAuth(
+  client: AuthHttpClient,
+  continueUrl: string,
+  result: JsonRecord,
+  emailResult: JsonRecord,
+  passwordResult: JsonRecord
+): Promise<Awaited<ReturnType<AuthHttpClient['follow']>>> {
+  let completed = await client.follow(continueUrl, client.navigateHeaders('https://auth.openai.com/log-in/password'), 20)
+  if (new URL(completed.url).pathname === '/workspace' && completed.url.startsWith('https://auth.openai.com/')) {
+    const listed = await client.request('https://auth.openai.com/api/accounts/workspace/list', {
+      headers: client.authHeaders('https://auth.openai.com/workspace')
+    }).catch(() => null)
+    const workspaces = collectWorkspaces(client, result, emailResult, passwordResult, completed.text, listed?.json() ?? null)
+    const selectedWorkspace = pickPreferredWorkspace(workspaces) || workspaces[0]
+    if (!selectedWorkspace) {
+      throw new ManualActionRequiredError('ChatGPT 登录需要选择空间，但未取得可用空间', 'CHATGPT_WORKSPACE_MISSING')
+    }
+    const selected = await postAuth(
+      client,
+      'https://auth.openai.com/api/accounts/workspace/select',
+      { workspace_id: selectedWorkspace.id },
+      'https://auth.openai.com/workspace'
+    )
+    if (selected.status >= 400) {
+      throw new ManualActionRequiredError(`ChatGPT 空间选择失败（HTTP ${selected.status}）`, 'CHATGPT_WORKSPACE_FAILED')
+    }
+    const next = extractNextUrl(selected.json, selected.location)
+    if (!next) throw new ManualActionRequiredError('ChatGPT 空间选择后没有下一跳', 'CHATGPT_WORKSPACE_FAILED')
+    completed = await client.follow(new URL(next, 'https://auth.openai.com').toString(), client.navigateHeaders('https://auth.openai.com/workspace'), 20)
+  }
+  return completed
+}
+
 async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<ChatGptSession> {
   const client = newAuthClient(input.session)
   const csrf = await client.request('https://chatgpt.com/api/auth/csrf', {
@@ -542,10 +575,11 @@ async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<
     input.session.deviceId = loginDeviceId
     client.cookies.applySetCookie(`oai-did=${loginDeviceId}; Domain=.openai.com; Path=/`, 'https://auth.openai.com/')
   }
-  const { continueUrl, mfaVerified } = await authenticateCredentials({ ...input, authUrl }, client)
-  const completed = await client.follow(continueUrl, client.navigateHeaders('https://auth.openai.com/log-in/password'), 20)
+  const { continueUrl, result, emailResult, passwordResult, mfaVerified } = await authenticateCredentials({ ...input, authUrl }, client)
+  const completed = await finishChatGptOAuth(client, continueUrl, result, emailResult, passwordResult)
   if (completed.status >= 400 || !completed.url.startsWith('https://chatgpt.com/')) {
-    throw new ManualActionRequiredError(`ChatGPT 登录未完成（HTTP ${completed.status}）`, 'CHATGPT_SESSION_FAILED')
+    const stoppedAt = new URL(completed.url)
+    throw new ManualActionRequiredError(`ChatGPT 登录未完成（HTTP ${completed.status}）：${stoppedAt.origin}${stoppedAt.pathname}`, 'CHATGPT_SESSION_FAILED')
   }
   const sessionResponse = await client.request('https://chatgpt.com/api/auth/session', {
     headers: { ...client.navigateHeaders('https://chatgpt.com/'), accept: 'application/json' }

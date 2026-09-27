@@ -1,6 +1,29 @@
 import { authenticator } from 'otplib'
 import { describe, expect, it } from 'vitest'
-import { rotateTotpInAuthenticatedSession } from './openai-protocol-auth.js'
+import { CookieJar } from './cookie-jar.js'
+import { finishChatGptOAuth, rotateTotpInAuthenticatedSession } from './openai-protocol-auth.js'
+
+describe('ChatGPT login continuation', () => {
+  it.each(['personal', 'organization'])('selects a %s workspace before completing login', async (kind) => {
+    let selectedId = ''
+    const client = {
+      cookies: new CookieJar(),
+      navigateHeaders: () => ({}),
+      authHeaders: () => ({}),
+      follow: async (url: string) => ({ status: 200, url, text: '', headers: new Headers() }),
+      request: async (url: string, init?: { body?: string }) => {
+        const json = url.endsWith('/workspace/list')
+          ? { workspaces: [{ id: 'selected-workspace', kind }] }
+          : { continue_url: 'https://chatgpt.com/' }
+        if (url.endsWith('/workspace/select')) selectedId = JSON.parse(init?.body || '{}').workspace_id
+        return { status: 200, url, text: JSON.stringify(json), headers: new Headers(), json: () => json }
+      }
+    } as unknown as Parameters<typeof finishChatGptOAuth>[0]
+    const completed = await finishChatGptOAuth(client, 'https://auth.openai.com/workspace', {}, {}, {})
+    expect(completed.url).toBe('https://chatgpt.com/')
+    expect(selectedId).toBe('selected-workspace')
+  })
+})
 
 describe('OpenAI 2FA rotation protocol', () => {
   it('stages the issued secret before activation and confirms the new factor', async () => {
