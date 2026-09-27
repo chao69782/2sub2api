@@ -97,10 +97,10 @@
             </div>
             <div class="text-xs text-slate-500">最近检查：{{ formatTime(account.lastCheckAt) }}</div>
             <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-              <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-              <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
               <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
+              <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
               <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
+              <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
             </div>
           </article>
@@ -152,10 +152,10 @@
               <td class="px-4 py-3 text-slate-500">{{ formatTime(account.lastCheckAt) }}</td>
               <td class="sticky right-0 z-10 border-l border-slate-200 bg-white px-4 py-3 group-hover:bg-slate-50">
                 <div class="flex justify-end gap-1">
-                  <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-                  <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
+                  <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
+                  <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
                 </div>
               </td>
