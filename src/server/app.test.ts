@@ -19,7 +19,7 @@ function config(directory: string): AppConfig {
     configPath: 'test', dataDir: directory, adminPassword: 'test-password', masterKey: Buffer.alloc(32, 4),
     sessionSecret: 'a-session-cookie-secret-longer-than-32-characters', sub2apiAdminKey: 'admin-key',
     server: { host: '127.0.0.1', port: 1000, trust_proxy: false, cookie_secure: false },
-    auth: { username: 'admin', password_file: 'test', session_idle_minutes: 30, session_absolute_hours: 12, max_failed_attempts: 5, lockout_minutes: 15 },
+    auth: { username: 'admin', password_file: 'test', session_idle_minutes: 0, session_absolute_hours: 0, max_failed_attempts: 5, lockout_minutes: 15 },
     security: { master_key_file: 'test', session_secret_file: 'test' },
     sub2api: { base_url: 'http://127.0.0.1:9/api/v1', admin_key_file: 'test', request_timeout_seconds: 3 },
     scheduler: { check_interval_minutes: 5 },
@@ -101,6 +101,16 @@ describe('administrator session protection', () => {
     const setCookie = login.headers['set-cookie']
     const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(';')[0]
     expect(cookie).toContain('workbench_session=')
+    expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain('Max-Age=2147483647')
+
+    const secondLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'test-password' } })
+    expect(secondLogin.statusCode).toBe(200)
+    const secondSetCookie = secondLogin.headers['set-cookie']
+    const secondCookie = (Array.isArray(secondSetCookie) ? secondSetCookie[0] : secondSetCookie)?.split(';')[0]
+    expect(secondCookie).toContain('workbench_session=')
+    expect(secondCookie).not.toBe(cookie)
+    expect((await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: cookie! } })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: secondCookie! } })).statusCode).toBe(200)
 
     const runtimeSettings = await app.inject({ method: 'GET', url: '/api/settings', headers: { cookie: cookie! } })
     expect(runtimeSettings.statusCode).toBe(200)

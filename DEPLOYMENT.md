@@ -136,7 +136,7 @@ base_url: "http://host.docker.internal:8080/api/v1"
 base_url: "https://sub2api.example.com/api/v1"
 ```
 
-配置中的 `session_idle_minutes: 0` 和 `session_absolute_hours: 0` 表示管理员登录会话不自动过期。公网部署建议通过防火墙限制访问范围，并在反向代理启用 HTTPS。
+配置中的 `session_idle_minutes: 0` 和 `session_absolute_hours: 0` 表示管理员登录会话不自动过期。登录 Cookie 也会持久保存，同一账号可在多台设备、多个地点同时保持登录。公网部署建议通过防火墙限制访问范围，并在反向代理启用 HTTPS。
 
 ## 5. 从源码构建镜像
 

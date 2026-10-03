@@ -7,6 +7,10 @@ import { randomToken, sha256 } from './crypto.js'
 import type { WorkbenchDatabase } from './db.js'
 
 const now = () => new Date()
+// Max-Age is an integer number of seconds in the cookie format. This is the
+// largest value accepted by common browsers and keeps the client cookie
+// persistent while the server-side session remains non-expiring.
+const PERSISTENT_SESSION_MAX_AGE_SECONDS = 2_147_483_647
 
 interface AuthState {
   username: string
@@ -106,9 +110,12 @@ export class AuthService {
       httpOnly: true,
       sameSite: 'strict',
       secure: this.config.server.cookie_secure,
-      signed: true
+      signed: true,
+      maxAge: PERSISTENT_SESSION_MAX_AGE_SECONDS
     }
-    if (this.config.auth.session_absolute_hours > 0) Object.assign(options, { maxAge: this.config.auth.session_absolute_hours * 60 * 60 })
+    if (this.config.auth.session_absolute_hours > 0) {
+      Object.assign(options, { maxAge: this.config.auth.session_absolute_hours * 60 * 60 })
+    }
     reply.setCookie('workbench_session', token, options)
   }
 
