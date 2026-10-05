@@ -83,6 +83,159 @@ describe('model restrictions', () => {
 })
 
 describe('administrator session protection', () => {
+  async function createSessionApp(authOverrides: Partial<AppConfig['auth']> = {}) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-session-'))
+    const appConfig = config(directory)
+    Object.assign(appConfig.auth, authOverrides)
+    const db = openDatabase(directory)
+    const app = await buildApp(appConfig, db)
+    const fixture = { directory, config: appConfig, db, app }
+    cleanup.push(async () => {
+      await fixture.app.close()
+      fixture.db.close()
+      fs.rmSync(directory, { recursive: true, force: true })
+    })
+    return fixture
+  }
+
+  function cookieHeader(value: string | string[] | undefined): string {
+    const header = Array.isArray(value) ? value[0] : value
+    expect(header).toBeTruthy()
+    return header!
+  }
+
+  async function login(app: Awaited<ReturnType<typeof buildApp>>, remoteAddress = '192.0.2.10') {
+    const response = await app.inject({
+      method: 'POST', url: '/api/auth/login', remoteAddress,
+      payload: { username: 'admin', password: 'test-password' }
+    })
+    expect(response.statusCode).toBe(200)
+    const header = cookieHeader(response.headers['set-cookie'])
+    return { cookie: header.split(';')[0], csrfToken: response.json<{ csrfToken: string }>().csrfToken }
+  }
+
+  it('upgrades an existing non-expiring session cookie even when its stored dates are old', async () => {
+    const { app, db } = await createSessionApp()
+    const session = await login(app)
+    const oldDate = '2000-01-01T00:00:00.000Z'
+    db.prepare('UPDATE sessions SET created_at = ?, last_seen_at = ?, expires_at = ?').run(oldDate, oldDate, oldDate)
+
+    const startedAt = Date.now()
+    const restored = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })
+    expect(restored.statusCode).toBe(200)
+    expect(restored.headers['cache-control']).toBe('no-store')
+    expect(restored.json()).toEqual({ user: { username: 'admin' }, csrfToken: session.csrfToken })
+    const renewed = cookieHeader(restored.headers['set-cookie'])
+    expect(renewed.split(';')[0]).toBe(session.cookie)
+    expect(renewed).toContain('Max-Age=34560000')
+    expect(renewed).toContain('HttpOnly')
+    expect(renewed).toContain('SameSite=Strict')
+    const expires = /(?:^|; )Expires=([^;]+)/.exec(renewed)?.[1]
+    expect(expires).toBeDefined()
+    const lifetime = 400 * 24 * 60 * 60_000
+    expect(new Date(expires!).getTime()).toBeGreaterThanOrEqual(startedAt + lifetime - 1000)
+    expect(new Date(expires!).getTime()).toBeLessThanOrEqual(Date.now() + lifetime)
+    const stored = db.prepare('SELECT created_at, last_seen_at, expires_at FROM sessions').get() as {
+      created_at: string; last_seen_at: string; expires_at: string
+    }
+    expect(new Date(stored.last_seen_at).getTime()).toBeGreaterThanOrEqual(startedAt)
+    expect(stored.created_at).toBe(oldDate)
+    expect(stored.expires_at).toBe(oldDate)
+  })
+
+  it('keeps the same session valid when the client changes source IP', async () => {
+    const { app, db } = await createSessionApp()
+    const session = await login(app, '192.0.2.10')
+    expect(db.prepare('SELECT source_ip FROM sessions').get()).toEqual({ source_ip: '192.0.2.10' })
+    for (const remoteAddress of ['198.51.100.20', '203.0.113.30']) {
+      const restored = await app.inject({ method: 'GET', url: '/api/auth/me', remoteAddress, headers: { cookie: session.cookie } })
+      expect(restored.statusCode).toBe(200)
+      expect(restored.json().csrfToken).toBe(session.csrfToken)
+      expect(cookieHeader(restored.headers['set-cookie']).split(';')[0]).toBe(session.cookie)
+    }
+  })
+
+  it('restores the same session after restarting the app and reopening its database', async () => {
+    const fixture = await createSessionApp()
+    const session = await login(fixture.app)
+    await fixture.app.close()
+    fixture.db.close()
+    fixture.db = openDatabase(fixture.directory)
+    fixture.app = await buildApp(fixture.config, fixture.db)
+
+    const restored = await fixture.app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })
+    expect(restored.statusCode).toBe(200)
+    expect(restored.json()).toEqual({ user: { username: 'admin' }, csrfToken: session.csrfToken })
+    expect(cookieHeader(restored.headers['set-cookie']).split(';')[0]).toBe(session.cookie)
+  })
+
+  it('preserves a finite absolute deadline and rejects the session after that deadline', async () => {
+    const { app, db } = await createSessionApp({ session_absolute_hours: 1 })
+    const session = await login(app)
+    const deadline = new Date(Date.now() + 15 * 60_000).toISOString()
+    db.prepare('UPDATE sessions SET expires_at = ?').run(deadline)
+
+    const active = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })
+    expect(active.statusCode).toBe(200)
+    expect(active.headers['set-cookie']).toBeUndefined()
+    expect(db.prepare('SELECT expires_at FROM sessions').get()).toEqual({ expires_at: deadline })
+
+    db.prepare('UPDATE sessions SET expires_at = ?').run(new Date(Date.now() - 1000).toISOString())
+    const expired = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })
+    expect(expired.statusCode).toBe(401)
+    expect(expired.headers['set-cookie']).toBeUndefined()
+    expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 0 })
+  })
+
+  it('still rejects idle sessions when an idle limit is explicitly configured', async () => {
+    const { app, db } = await createSessionApp({ session_idle_minutes: 30 })
+    const session = await login(app)
+    expect((await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })).statusCode).toBe(200)
+    db.prepare('UPDATE sessions SET last_seen_at = ?').run(new Date(Date.now() - 31 * 60_000).toISOString())
+
+    const expired = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })
+    expect(expired.statusCode).toBe(401)
+    expect(expired.headers['set-cookie']).toBeUndefined()
+    expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 0 })
+  })
+
+  it('clears the cookie and revokes only the session that logs out', async () => {
+    const { app, db } = await createSessionApp()
+    const first = await login(app)
+    const second = await login(app)
+    const loggedOut = await app.inject({
+      method: 'POST', url: '/api/auth/logout',
+      headers: { cookie: first.cookie, 'x-csrf-token': first.csrfToken }
+    })
+    expect(loggedOut.statusCode).toBe(200)
+    const cleared = cookieHeader(loggedOut.headers['set-cookie'])
+    expect(cleared).toMatch(/^workbench_session=;/)
+    expect(cleared).toContain('Max-Age=0')
+    expect(cleared).not.toContain('Max-Age=34560000')
+    expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 1 })
+    const revoked = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: first.cookie } })
+    expect(revoked.statusCode).toBe(401)
+    expect(revoked.headers['set-cookie']).toBeUndefined()
+    const other = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: second.cookie } })
+    expect(other.statusCode).toBe(200)
+    expect(other.json().csrfToken).toBe(second.csrfToken)
+  })
+
+  it('does not renew tampered or revoked-version session cookies', async () => {
+    const { app, db } = await createSessionApp()
+    const session = await login(app)
+    const tampered = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: `${session.cookie}x` } })
+    expect(tampered.statusCode).toBe(401)
+    expect(tampered.headers['set-cookie']).toBeUndefined()
+    expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 1 })
+
+    db.prepare('UPDATE auth_runtime_state SET session_version = session_version + 1').run()
+    const revoked = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { cookie: session.cookie } })
+    expect(revoked.statusCode).toBe(401)
+    expect(revoked.headers['set-cookie']).toBeUndefined()
+    expect(db.prepare('SELECT count(*) AS count FROM sessions').get()).toEqual({ count: 0 })
+  })
+
   it('requires a signed session and CSRF token for writes', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-app-'))
     const db: WorkbenchDatabase = openDatabase(directory)
@@ -101,7 +254,7 @@ describe('administrator session protection', () => {
     const setCookie = login.headers['set-cookie']
     const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)?.split(';')[0]
     expect(cookie).toContain('workbench_session=')
-    expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain('Max-Age=2147483647')
+    expect(String(Array.isArray(setCookie) ? setCookie[0] : setCookie)).toContain('Max-Age=34560000')
 
     const secondLogin = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'test-password' } })
     expect(secondLogin.statusCode).toBe(200)

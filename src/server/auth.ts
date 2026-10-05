@@ -7,10 +7,9 @@ import { randomToken, sha256 } from './crypto.js'
 import type { WorkbenchDatabase } from './db.js'
 
 const now = () => new Date()
-// Max-Age is an integer number of seconds in the cookie format. This is the
-// largest value accepted by common browsers and keeps the client cookie
-// persistent while the server-side session remains non-expiring.
-const PERSISTENT_SESSION_MAX_AGE_SECONDS = 2_147_483_647
+// Keep within Chromium's 400-day cookie limit. Refresh non-expiring sessions
+// on authenticated requests so active logins keep their persistent cookie.
+const PERSISTENT_SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60
 
 interface AuthState {
   username: string
@@ -75,7 +74,7 @@ export class AuthService {
     return { token, csrfToken }
   }
 
-  authenticate(request: FastifyRequest): { username: string; csrfToken: string } | null {
+  authenticate(request: FastifyRequest, reply: FastifyReply): { username: string; csrfToken: string } | null {
     const raw = request.cookies.workbench_session
     if (!raw) return null
     const unsigned = request.unsignCookie(raw)
@@ -94,6 +93,10 @@ export class AuthService {
       return null
     }
     this.db.prepare('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?').run(timestamp.toISOString(), sha256(unsigned.value))
+    if (this.config.auth.session_absolute_hours === 0) {
+      // Also upgrades cookies issued before persistent sessions were enabled.
+      this.setSessionCookie(reply, unsigned.value)
+    }
     return { username: session.username, csrfToken: session.csrf_token }
   }
 
@@ -105,16 +108,17 @@ export class AuthService {
   }
 
   setSessionCookie(reply: FastifyReply, token: string): void {
+    const maxAge = this.config.auth.session_absolute_hours > 0
+      ? this.config.auth.session_absolute_hours * 60 * 60
+      : PERSISTENT_SESSION_MAX_AGE_SECONDS
     const options: CookieSerializeOptions = {
       path: '/',
       httpOnly: true,
       sameSite: 'strict',
       secure: this.config.server.cookie_secure,
       signed: true,
-      maxAge: PERSISTENT_SESSION_MAX_AGE_SECONDS
-    }
-    if (this.config.auth.session_absolute_hours > 0) {
-      Object.assign(options, { maxAge: this.config.auth.session_absolute_hours * 60 * 60 })
+      maxAge,
+      expires: new Date(Date.now() + maxAge * 1000)
     }
     reply.setCookie('workbench_session', token, options)
   }

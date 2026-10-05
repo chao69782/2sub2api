@@ -16,7 +16,12 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (!auth.ready) await auth.restore()
+  if (!auth.ready) {
+    auth.pendingPath = to.fullPath
+    await auth.restore()
+    if (!auth.ready) return false
+    auth.pendingPath = ''
+  }
   if (to.meta.auth && !auth.username) return { name: 'login', query: { redirect: to.fullPath } }
   if (to.name === 'login' && auth.username) return { name: 'accounts' }
 })

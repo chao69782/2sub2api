@@ -354,8 +354,10 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
   })
 
   app.addHook('onRequest', async (request, reply) => {
-    if (!request.url.startsWith('/api/') || request.url === '/api/auth/login') return
-    const session = auth.authenticate(request)
+    if (!request.url.startsWith('/api/')) return
+    reply.header('Cache-Control', 'no-store')
+    if (request.url === '/api/auth/login') return
+    const session = auth.authenticate(request, reply)
     if (!session) return reply.code(401).send({ code: 'UNAUTHORIZED', message: '请先登录' })
     request.authUser = session
     if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
