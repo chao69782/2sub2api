@@ -64,7 +64,9 @@ function mapAccount(row: AccountRow): ManagedAccount {
   try { usage = JSON.parse(row.last_snapshot_json || '{}') as typeof usage } catch { /* ignore malformed snapshots */ }
   try {
     const parsed = row.import_overrides_json ? JSON.parse(row.import_overrides_json) as unknown : null
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) importOverrides = parsed as AccountImportOverrides
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      importOverrides = { modelMapping: {}, ...parsed } as AccountImportOverrides
+    }
   } catch { /* ignore malformed per-account settings */ }
   return {
     id: row.id,

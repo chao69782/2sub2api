@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ManagedAccount } from '../shared/types.js'
+import type { AccountImportOverrides, ManagedAccount } from '../shared/types.js'
 import type { AppConfig } from './config.js'
 import { SecretCipher } from './crypto.js'
 import { openDatabase, type WorkbenchDatabase } from './db.js'
@@ -65,19 +65,19 @@ describe('model restrictions', () => {
     })
   })
 
-  it('uses account import settings while retaining the global model mapping', () => {
+  it('uses account model mappings without merging the global mapping', () => {
     const globalDefaults = {
       modelWhitelist: ['gpt-5.6-sol'], modelMapping: { alias: 'gpt-5.6-sol' }, concurrency: 3, priority: 50,
       groupIds: [1], loadFactor: null, autoPauseOnExpired: true, proxyPolicy: 'auto' as const, fixedProxyId: null
     }
     const overrides = {
-      modelWhitelist: ['gpt-5.6-luna'], concurrency: 8, priority: 90, groupIds: [], loadFactor: 2,
+      modelWhitelist: ['gpt-5.6-luna'], modelMapping: { 'account-alias': 'gpt-5.6-luna' }, concurrency: 8, priority: 90, groupIds: [], loadFactor: 2,
       autoPauseOnExpired: false, proxyPolicy: 'direct' as const, fixedProxyId: null
     }
-    expect(resolveAccountImportDefaults(globalDefaults, overrides)).toEqual({
-      ...overrides,
-      modelMapping: { alias: 'gpt-5.6-sol' }
-    })
+    expect(resolveAccountImportDefaults(globalDefaults, overrides)).toEqual(overrides)
+    expect(resolveAccountImportDefaults(globalDefaults, { ...overrides, modelMapping: {} }).modelMapping).toEqual({})
+    const { modelMapping: _legacyMapping, ...legacyOverrides } = overrides
+    expect(resolveAccountImportDefaults(globalDefaults, legacyOverrides as unknown as AccountImportOverrides).modelMapping).toEqual({})
     expect(resolveAccountImportDefaults(globalDefaults, null)).toBe(globalDefaults)
   })
 })
@@ -297,7 +297,7 @@ describe('administrator session protection', () => {
     expect(viewed.headers['cache-control']).toBe('no-store, private')
     expect(viewed.json()).toEqual({ email: 'a@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
     const importOverrides = {
-      modelWhitelist: ['gpt-5.6-luna'], concurrency: 6, priority: 70, groupIds: [], loadFactor: null,
+      modelWhitelist: ['gpt-5.6-luna'], modelMapping: { 'account-alias': 'gpt-5.6-luna' }, concurrency: 6, priority: 70, groupIds: [], loadFactor: null,
       autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null
     }
     const queued = await app.inject({ method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`, headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken }, payload: { accountName: 'Primary OpenAI', importOverrides } })
@@ -309,6 +309,21 @@ describe('administrator session protection', () => {
     expect(listed.json().items[0].sub2apiAccountName).toBe('Primary OpenAI')
     expect(listed.json().items[0].totpRotationStatus).toBe('pending')
     expect(listed.json().items[0].importOverrides).toEqual(importOverrides)
+    for (const modelMapping of [{ alias: '' }, { ' ': 'gpt-5.6-luna' }, { alias: 123 }]) {
+      const invalidMapping = await app.inject({
+        method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`,
+        headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken },
+        payload: { accountName: 'Primary OpenAI', importOverrides: { ...importOverrides, modelMapping } }
+      })
+      expect(invalidMapping.statusCode).toBe(400)
+    }
+    const clearedMapping = await app.inject({
+      method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`,
+      headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken },
+      payload: { accountName: 'Primary OpenAI', importOverrides: { ...importOverrides, modelMapping: {} } }
+    })
+    expect(clearedMapping.statusCode).toBe(202)
+    expect(new AccountRepository(db, new SecretCipher(config(directory).masterKey)).get(accountId)?.importOverrides?.modelMapping).toEqual({})
   })
 })
 

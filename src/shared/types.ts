@@ -33,7 +33,7 @@ export interface ImportDefaults {
   fixedProxyId: number | null
 }
 
-export type AccountImportOverrides = Omit<ImportDefaults, 'modelMapping'>
+export type AccountImportOverrides = ImportDefaults
 
 export interface SchedulerSettings {
   checkIntervalMinutes: number

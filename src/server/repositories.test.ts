@@ -62,12 +62,24 @@ describe('AccountRepository', () => {
     const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 5)))
     const account = repository.create({ email: 'custom@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
     const importOverrides = {
-      modelWhitelist: ['gpt-5.6-luna'], concurrency: 7, priority: 88, groupIds: [2, 3],
+      modelWhitelist: ['gpt-5.6-luna'], modelMapping: { 'account-alias': 'gpt-5.6-luna' }, concurrency: 7, priority: 88, groupIds: [2, 3],
       loadFactor: 4, autoPauseOnExpired: false, proxyPolicy: 'direct' as const, fixedProxyId: null
     }
 
     expect(repository.update(account.id, { importOverrides }).importOverrides).toEqual(importOverrides)
+    expect(repository.get(account.id)?.importOverrides?.modelMapping).toEqual(importOverrides.modelMapping)
     expect(repository.update(account.id, { importOverrides: null }).importOverrides).toBeNull()
+  })
+
+  it('reads legacy account import settings with an empty model mapping', () => {
+    const { db } = testDatabase()
+    const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 5)))
+    const account = repository.create({ email: 'legacy-mapping@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    db.prepare('UPDATE managed_accounts SET import_overrides_json = ? WHERE id = ?').run(JSON.stringify({
+      modelWhitelist: ['gpt-5.6-luna'], concurrency: 7, priority: 88, groupIds: [],
+      loadFactor: null, autoPauseOnExpired: true, proxyPolicy: 'direct', fixedProxyId: null
+    }), account.id)
+    expect(repository.get(account.id)?.importOverrides?.modelMapping).toEqual({})
   })
 
   it('migrates legacy authorization policies to managed login', () => {

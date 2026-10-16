@@ -229,7 +229,7 @@
           <div class="grid gap-3 sm:grid-cols-2">
             <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors" :class="authUseGlobal ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'">
               <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="true" />
-              <span><span class="block text-sm font-medium text-slate-800">使用全局配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">跟随设置页中的导入模板和模型白名单</span></span>
+              <span><span class="block text-sm font-medium text-slate-800">使用全局配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">跟随设置页中的导入模板、模型白名单和模型映射</span></span>
             </label>
             <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors" :class="!authUseGlobal ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'">
               <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="false" />
@@ -279,7 +279,21 @@
           <section class="rounded-md border border-slate-200 p-4">
             <label class="label" for="accountModelWhitelist">模型白名单</label>
             <textarea id="accountModelWhitelist" v-model="authModelWhitelistText" class="textarea min-h-32 font-mono" spellcheck="false" placeholder="每行一个模型 ID，例如：&#10;gpt-5.6-luna&#10;gpt-5.6-sol"></textarea>
-            <p class="mt-2 text-xs leading-5 text-slate-500">仅覆盖该账号的模型白名单；模型映射继续使用设置页中的全局配置。</p>
+            <p class="mt-2 text-xs leading-5 text-slate-500">仅对该账号生效，每行一个准确的模型 ID，不支持通配符。</p>
+          </section>
+
+          <section class="rounded-md border border-slate-200 p-4" aria-labelledby="accountModelMappingTitle">
+            <div class="mb-3 flex items-center gap-3">
+              <h3 id="accountModelMappingTitle" class="text-sm font-semibold text-slate-800">模型映射</h3>
+              <button type="button" class="button ml-auto" @click="authModelRows.push({ source: '', target: '' })"><Plus :size="16" />添加</button>
+            </div>
+            <div v-for="(row, index) in authModelRows" :key="index" class="mb-3 grid grid-cols-[minmax(0,1fr)_44px] gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] sm:gap-3">
+              <label class="min-w-0"><span class="label">客户端模型</span><input v-model="row.source" class="input min-w-0 font-mono" placeholder="客户端模型 ID" spellcheck="false" /></label>
+              <label class="col-start-1 row-start-2 min-w-0 sm:col-start-auto sm:row-start-auto"><span class="label">上游模型</span><input v-model="row.target" class="input min-w-0 font-mono" placeholder="上游模型 ID" spellcheck="false" /></label>
+              <button type="button" class="icon-button col-start-2 row-start-1 mt-6 h-11 w-11 text-red-600 sm:col-start-auto sm:row-start-auto" title="删除模型映射" :aria-label="`删除第 ${index + 1} 条模型映射`" @click="authModelRows.splice(index, 1)"><Trash2 :size="16" /></button>
+            </div>
+            <p v-if="!authModelRows.length" class="py-3 text-center text-sm text-slate-500">未设置模型映射</p>
+            <p class="mt-2 text-xs leading-5 text-slate-500">仅使用该账号的映射，留空表示不添加额外映射；同名映射优先于白名单，后续自动重授权继续使用。</p>
           </section>
         </div>
 
@@ -369,6 +383,7 @@ const authSub2apiName = ref('')
 const authError = ref('')
 const authUseGlobal = ref(true)
 const authModelWhitelistText = ref('')
+const authModelRows = ref<Array<{ source: string; target: string }>>([])
 const globalSettings = ref<RuntimeSettings | null>(null)
 const groups = ref<Array<{ id: number; name: string }>>([])
 const proxies = ref<Array<{ id: number; name: string; account_count?: number; latency_ms?: number }>>([])
@@ -376,7 +391,7 @@ let groupsMetadataLoaded = false
 let proxiesMetadataLoaded = false
 let authorizationMetadataRequest: Promise<void> | null = null
 const authOverrides = ref<AccountImportOverrides>({
-  modelWhitelist: [], concurrency: 3, priority: 50, groupIds: [], loadFactor: null,
+  modelWhitelist: [], modelMapping: {}, concurrency: 3, priority: 50, groupIds: [], loadFactor: null,
   autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null
 })
 let searchTimer: number | undefined
@@ -513,13 +528,13 @@ async function startTotpRotation(account: ManagedAccount) {
 async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); selectedIds.value = selectedIds.value.filter((id) => id !== account.id); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
 function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
   return {
-    modelWhitelist: [...defaults.modelWhitelist], concurrency: defaults.concurrency, priority: defaults.priority,
+    modelWhitelist: [...defaults.modelWhitelist], modelMapping: {}, concurrency: defaults.concurrency, priority: defaults.priority,
     groupIds: [...defaults.groupIds], loadFactor: defaults.loadFactor, autoPauseOnExpired: defaults.autoPauseOnExpired,
     proxyPolicy: defaults.proxyPolicy, fixedProxyId: defaults.fixedProxyId
   }
 }
 function cloneOverrides(overrides: AccountImportOverrides): AccountImportOverrides {
-  return { ...overrides, modelWhitelist: [...overrides.modelWhitelist], groupIds: [...overrides.groupIds] }
+  return { ...overrides, modelMapping: { ...overrides.modelMapping }, modelWhitelist: [...overrides.modelWhitelist], groupIds: [...overrides.groupIds] }
 }
 async function openAuthorization(account: ManagedAccount) {
   try {
@@ -530,9 +545,10 @@ async function openAuthorization(account: ManagedAccount) {
     const selected = account.importOverrides ? cloneOverrides(account.importOverrides) : overridesFromDefaults(defaults)
     authAccountId.value = account.id
     authSub2apiName.value = account.sub2apiAccountName || account.email
-    authUseGlobal.value = !account.importOverrides
+    authUseGlobal.value = false
     authOverrides.value = selected
     authModelWhitelistText.value = selected.modelWhitelist.join('\n')
+    authModelRows.value = Object.entries(selected.modelMapping).map(([source, target]) => ({ source, target }))
     authError.value = ''
     authOpen.value = true
   } catch (e) {
@@ -544,10 +560,23 @@ function buildAuthorizationOverrides(): AccountImportOverrides | null {
   const modelWhitelist = authModelWhitelistText.value.split(/[\r\n,]+/).map((modelId) => modelId.trim()).filter(Boolean)
   if (new Set(modelWhitelist).size !== modelWhitelist.length) throw new Error('模型白名单中存在重复 ID')
   if (modelWhitelist.some((modelId) => modelId.includes('*'))) throw new Error('模型白名单只允许填写准确的模型 ID')
+  const entries: Array<[string, string]> = []
+  const sources = new Set<string>()
+  for (const row of authModelRows.value) {
+    const source = row.source.trim()
+    const target = row.target.trim()
+    if (!source && !target) continue
+    if (!source) throw new Error('模型映射缺少客户端模型')
+    if (!target) throw new Error(`模型 ${source} 缺少上游模型`)
+    if (sources.has(source)) throw new Error(`模型 ${source} 重复`)
+    sources.add(source)
+    entries.push([source, target])
+  }
   if (authOverrides.value.proxyPolicy === 'fixed' && !authOverrides.value.fixedProxyId) throw new Error('请选择固定代理')
   return {
     ...authOverrides.value,
     modelWhitelist,
+    modelMapping: Object.fromEntries(entries),
     groupIds: [...authOverrides.value.groupIds],
     fixedProxyId: authOverrides.value.proxyPolicy === 'fixed' ? authOverrides.value.fixedProxyId : null
   }

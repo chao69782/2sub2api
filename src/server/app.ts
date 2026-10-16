@@ -25,6 +25,7 @@ const REAUTH_FAILURE_COOLDOWN_HOURS = 6
 const modelWhitelistSchema = z.array(z.string().trim().min(1).max(200).refine((value) => !value.includes('*'), '模型白名单只允许填写准确的模型 ID'))
 const importProfileShape = {
   modelWhitelist: modelWhitelistSchema,
+  modelMapping: z.record(z.string().trim().min(1), z.string().trim().min(1)),
   concurrency: z.number().int().min(0).max(1000),
   priority: z.number().int().min(0).max(100000),
   groupIds: z.array(z.number().int().positive()),
@@ -44,11 +45,11 @@ const validateImportProfile = (
     ctx.addIssue({ code: 'custom', message: 'fixedProxyId is required for fixed proxy policy' })
   }
 }
-const accountImportOverridesSchema = z.object(importProfileShape).superRefine(validateImportProfile)
-const importDefaultsSchema = z.object({
+const accountImportOverridesSchema = z.object({
   ...importProfileShape,
-  modelMapping: z.record(z.string().min(1), z.string().min(1)),
+  modelMapping: importProfileShape.modelMapping.default({})
 }).superRefine(validateImportProfile)
+const importDefaultsSchema = z.object(importProfileShape).superRefine(validateImportProfile)
 const runtimeSettingsSchema = z.object({
   scheduler: schedulerSchema,
   importDefaults: importDefaultsSchema
@@ -59,7 +60,7 @@ export function buildModelRestrictionMapping(modelWhitelist: string[], explicitM
 }
 
 export function resolveAccountImportDefaults(globalDefaults: ImportDefaults, overrides: AccountImportOverrides | null): ImportDefaults {
-  return overrides ? { ...globalDefaults, ...overrides, modelMapping: globalDefaults.modelMapping } : globalDefaults
+  return overrides ? { ...globalDefaults, ...overrides, modelMapping: overrides.modelMapping ?? {} } : globalDefaults
 }
 
 export function buildSub2apiCredentialsUpdate(
@@ -531,10 +532,12 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
 
   app.post('/api/accounts/:id/authorize/auto', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
-    const body = z.object({
+    const parsed = z.object({
       accountName: z.string().trim().min(1).max(200),
       importOverrides: accountImportOverridesSchema.nullable().optional()
-    }).parse(request.body)
+    }).safeParse(request.body)
+    if (!parsed.success) return reply.code(400).send({ code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? '参数错误' })
+    const body = parsed.data
     const account = accounts.get(params.id)
     if (!account) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
     accounts.getSecrets(params.id)
