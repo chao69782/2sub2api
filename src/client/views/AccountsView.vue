@@ -528,7 +528,7 @@ async function startTotpRotation(account: ManagedAccount) {
 async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); selectedIds.value = selectedIds.value.filter((id) => id !== account.id); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
 function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
   return {
-    modelWhitelist: [...defaults.modelWhitelist], modelMapping: {}, concurrency: defaults.concurrency, priority: defaults.priority,
+    modelWhitelist: [...defaults.modelWhitelist], modelMapping: { ...defaults.modelMapping }, concurrency: defaults.concurrency, priority: defaults.priority,
     groupIds: [...defaults.groupIds], loadFactor: defaults.loadFactor, autoPauseOnExpired: defaults.autoPauseOnExpired,
     proxyPolicy: defaults.proxyPolicy, fixedProxyId: defaults.fixedProxyId
   }
