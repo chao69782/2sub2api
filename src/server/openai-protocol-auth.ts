@@ -543,14 +543,45 @@ export async function finishChatGptOAuth(
   return completed
 }
 
-async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<ChatGptSession> {
-  const client = newAuthClient(input.session)
+function chatGptLoginFailure(
+  message: string,
+  response: Awaited<ReturnType<AuthHttpClient['request']>>,
+  redirect = ''
+): ManualActionRequiredError {
+  const details = [`HTTP ${response.status}`]
+  const contentType = response.headers.get('content-type')?.split(';')[0]
+  if (contentType) details.push(contentType)
+  const json = asRecord(response.json())
+  const error = typeof json.error === 'string' ? json.error : asRecord(json.error).code
+  if (typeof error === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,79}$/.test(error)) details.push(`error=${error}`)
+  if (redirect) {
+    try {
+      const target = new URL(redirect, 'https://chatgpt.com')
+      // OAuth query strings and response bodies may contain credentials. Only report the route and error code.
+      if (['https://chatgpt.com', 'https://auth.openai.com'].includes(target.origin) && !target.username && !target.password) {
+        details.push(`${target.origin}${target.pathname}`)
+        const redirectError = target.searchParams.get('error')
+        if (redirectError && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,79}$/.test(redirectError)) details.push(`error=${redirectError}`)
+        if (target.searchParams.get('csrf') === 'true') details.push('CSRF 校验失败')
+      } else {
+        details.push('登录重定向地址不受信任')
+      }
+    } catch { details.push('登录重定向地址无效') }
+  }
+  const challenge = response.status === 403 || response.status === 429 || response.headers.get('cf-mitigated') === 'challenge'
+  return new ManualActionRequiredError(
+    `${message}（${details.join('；')}）${challenge ? '：ChatGPT 要求安全验证或限制了请求，请检查服务器出口网络后重试' : ''}`,
+    challenge ? 'OPENAI_SECURITY_CHALLENGE' : 'CHATGPT_SESSION_FAILED'
+  )
+}
+
+export async function startChatGptLogin(client: Pick<AuthHttpClient, 'request' | 'navigateHeaders'>): Promise<string> {
   const csrf = await client.request('https://chatgpt.com/api/auth/csrf', {
     headers: { ...client.navigateHeaders(), accept: 'application/json' }
   })
-  const csrfToken = csrf.json().csrfToken
-  if (csrf.status !== 200 || typeof csrfToken !== 'string' || !csrfToken) {
-    throw new ManualActionRequiredError('无法初始化 ChatGPT 登录会话', 'CHATGPT_SESSION_FAILED')
+  const csrfToken = asRecord(csrf.json()).csrfToken
+  if (csrf.status !== 200 || csrf.headers.get('cf-mitigated') === 'challenge' || typeof csrfToken !== 'string' || !csrfToken) {
+    throw chatGptLoginFailure('无法初始化 ChatGPT 登录会话', csrf, csrf.headers.get('location') || '')
   }
   const form = new URLSearchParams({ csrfToken, callbackUrl: 'https://chatgpt.com/', json: 'true' })
   const signIn = await client.request('https://chatgpt.com/api/auth/signin/openai', {
@@ -566,10 +597,19 @@ async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<
     },
     body: form.toString()
   })
-  const authUrl = signIn.json().url
-  if (signIn.status !== 200 || typeof authUrl !== 'string' || !authUrl.startsWith('https://auth.openai.com/api/accounts/authorize?')) {
-    throw new ManualActionRequiredError('无法取得 ChatGPT 登录地址', 'CHATGPT_SESSION_FAILED')
+  const authUrl = extractNextUrl(asRecord(signIn.json()), signIn.headers.get('location'))
+  let target: URL | null = null
+  try { target = new URL(authUrl) } catch { /* Report malformed or missing URLs below. */ }
+  if (signIn.status < 200 || signIn.status >= 400 || signIn.headers.get('cf-mitigated') === 'challenge' ||
+    !target || target.origin !== 'https://auth.openai.com' || target.username || target.password || target.searchParams.has('error')) {
+    throw chatGptLoginFailure('无法取得 ChatGPT 登录地址', signIn, authUrl)
   }
+  return target.toString()
+}
+
+async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<ChatGptSession> {
+  const client = newAuthClient(input.session)
+  const authUrl = await startChatGptLogin(client)
   const loginDeviceId = new URL(authUrl).searchParams.get('device_id')
   if (loginDeviceId && /^[0-9a-f-]{36}$/i.test(loginDeviceId)) {
     input.session.deviceId = loginDeviceId
