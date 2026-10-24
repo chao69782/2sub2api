@@ -320,10 +320,11 @@ describe('administrator session protection', () => {
     const clearedMapping = await app.inject({
       method: 'POST', url: `/api/accounts/${accountId}/authorize/auto`,
       headers: { cookie: cookie!, 'x-csrf-token': body.csrfToken },
-      payload: { accountName: 'Primary OpenAI', importOverrides: { ...importOverrides, modelMapping: {} } }
+      payload: { accountName: 'Primary OpenAI', importOverrides: { ...importOverrides, modelMapping: {}, modelMappingConfigured: true } }
     })
     expect(clearedMapping.statusCode).toBe(202)
     expect(new AccountRepository(db, new SecretCipher(config(directory).masterKey)).get(accountId)?.importOverrides?.modelMapping).toEqual({})
+    expect(new AccountRepository(db, new SecretCipher(config(directory).masterKey)).get(accountId)?.importOverrides?.modelMappingConfigured).toBe(true)
   })
 })
 

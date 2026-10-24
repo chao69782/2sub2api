@@ -47,7 +47,8 @@ const validateImportProfile = (
 }
 const accountImportOverridesSchema = z.object({
   ...importProfileShape,
-  modelMapping: importProfileShape.modelMapping.default({})
+  modelMapping: importProfileShape.modelMapping.default({}),
+  modelMappingConfigured: z.boolean().optional()
 }).superRefine(validateImportProfile)
 const importDefaultsSchema = z.object(importProfileShape).superRefine(validateImportProfile)
 const runtimeSettingsSchema = z.object({

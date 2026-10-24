@@ -543,6 +543,10 @@ async function openAuthorization(account: ManagedAccount) {
     const defaults = globalSettings.value?.importDefaults
     if (!defaults) throw new Error('无法读取全局导入配置')
     const selected = account.importOverrides ? cloneOverrides(account.importOverrides) : overridesFromDefaults(defaults)
+    // Earlier versions saved empty mappings before account mapping defaults were supported.
+    if (!selected.modelMappingConfigured && !Object.keys(selected.modelMapping).length) {
+      selected.modelMapping = { ...defaults.modelMapping }
+    }
     authAccountId.value = account.id
     authSub2apiName.value = account.sub2apiAccountName || account.email
     authUseGlobal.value = false
@@ -577,6 +581,7 @@ function buildAuthorizationOverrides(): AccountImportOverrides | null {
     ...authOverrides.value,
     modelWhitelist,
     modelMapping: Object.fromEntries(entries),
+    modelMappingConfigured: true,
     groupIds: [...authOverrides.value.groupIds],
     fixedProxyId: authOverrides.value.proxyPolicy === 'fixed' ? authOverrides.value.fixedProxyId : null
   }
