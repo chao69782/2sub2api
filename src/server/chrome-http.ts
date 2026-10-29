@@ -42,6 +42,8 @@ export async function chromeRequest(
         method: init.method ?? 'GET',
         headers,
         timeout: 25_000,
+        // ChatGPT login responses can exceed Node's default 16 KiB header limit.
+        maxHeaderSize: 128 * 1024,
         ALPNProtocols: ['http/1.1']
       } as https.RequestOptions, (res) => {
         const chunks: Buffer[] = []
