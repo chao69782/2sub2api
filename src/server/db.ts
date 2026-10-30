@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS managed_accounts (
   auth_status TEXT NOT NULL DEFAULT 'not_authorized',
   health_status TEXT NOT NULL DEFAULT 'unknown',
   sync_status TEXT NOT NULL DEFAULT 'not_synced',
+  scheduling_paused INTEGER NOT NULL DEFAULT 0,
   selected_proxy_id INTEGER,
   token_expires_at TEXT,
   last_auth_at TEXT,
@@ -167,6 +168,9 @@ export function openDatabase(dataDir: string): Database.Database {
   }
   if (!accountColumns.has('totp_pending_secret_id')) {
     db.exec('ALTER TABLE managed_accounts ADD COLUMN totp_pending_secret_id TEXT')
+  }
+  if (!accountColumns.has('scheduling_paused')) {
+    db.exec('ALTER TABLE managed_accounts ADD COLUMN scheduling_paused INTEGER NOT NULL DEFAULT 0')
   }
   const rollbackProfitFeature = db.transaction(() => {
     db.exec(`

@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify'
 import cookie from '@fastify/cookie'
 import fastifyStatic from '@fastify/static'
 import { z } from 'zod'
-import { displayHealthStatus } from '../shared/account-status.js'
+import { displayHealthStatus, isSchedulingPaused } from '../shared/account-status.js'
 import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings, UsageAvailabilityEstimate, UsageWindowKind, UsageWindowSummary } from '../shared/types.js'
 import { AuthService } from './auth.js'
 import type { AppConfig } from './config.js'
@@ -153,8 +153,9 @@ function estimateWindowAvailability(
 }
 
 export function estimateAccountUsageAvailability(accounts: ManagedAccount[]): UsageAvailabilityEstimate {
+  const scheduledAccounts = accounts.filter((account) => !isSchedulingPaused(account))
   const estimates = usageWindowDefinitions
-    .map((definition) => estimateWindowAvailability(accounts, definition))
+    .map((definition) => estimateWindowAvailability(scheduledAccounts, definition))
     .filter((estimate): estimate is UsageAvailabilityEstimate => estimate !== null)
   const exhausting = estimates
     .filter((estimate) => estimate.status === 'exhausts_before_reset')
@@ -300,13 +301,12 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
       load_factor: defaults.loadFactor,
       auto_pause_on_expired: defaults.autoPauseOnExpired
     })
-    // A successful OAuth flow must clear the remote error flag before the
-    // account is returned to Sub2API's scheduler.  Sub2API owns the remote
-    // error state; the workbench only restores the account after reauth.
+    // Clear remote errors after reauthorization while preserving a manual pause.
     await sub2api.clearAccountError(remote.id)
-    remote = await sub2api.setAccountSchedulable(remote.id, true)
+    const schedulable = !accounts.get(accountId)?.schedulingPaused
+    remote = await sub2api.setAccountSchedulable(remote.id, schedulable)
     accounts.consumeOAuthSession(String(oauth.id))
-    accounts.linkRemote(accountId, { id: remote.id, name: remote.name, expiresAt: sub2apiTokenExpiresAt(remote) }, proxyId)
+    accounts.linkRemote(accountId, { id: remote.id, name: remote.name, expiresAt: sub2apiTokenExpiresAt(remote), schedulable: remote.schedulable ?? schedulable }, proxyId)
     const usage = await sub2api.queryAccountUsage(remote.id).catch(() => null)
     if (usage) accounts.syncRemote(accountId, { id: remote.id, name: remote.name, expiresAt: sub2apiTokenExpiresAt(remote), five_hour: usage.five_hour, seven_day: usage.seven_day })
     const usageIssue = usage && usageHealthIssue(usage)
@@ -489,6 +489,31 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     const job = jobs.enqueue({ accountId: params.id, type: 'rotate_totp', maxAttempts: 2 })
     audit(request, 'account.totp.rotate.queued', 'success', params.id, { jobId: job.id })
     return reply.code(202).send({ job })
+  })
+
+  app.post('/api/accounts/:id/schedulable', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params)
+    const parsed = z.object({ schedulable: z.boolean() }).strict().safeParse(request.body)
+    if (!parsed.success) return reply.code(400).send({ code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? '参数错误' })
+    const body = parsed.data
+    const account = accounts.get(params.id)
+    if (!account) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
+    if (!account.sub2apiAccountId) return reply.code(400).send({ code: 'ACCOUNT_NOT_SYNCED', message: '账号尚未导入 Sub2API' })
+    try {
+      const remote = await sub2api.setAccountSchedulable(account.sub2apiAccountId, body.schedulable)
+      accounts.setSchedulingPaused(params.id, !body.schedulable)
+      accounts.syncRemote(params.id, {
+        id: account.sub2apiAccountId,
+        name: remote.name ?? account.sub2apiAccountName ?? undefined,
+        status: remote.status,
+        schedulable: remote.schedulable ?? body.schedulable
+      })
+      audit(request, 'account.schedulable', 'success', params.id, { schedulable: body.schedulable })
+      return accounts.get(params.id)
+    } catch (error) {
+      audit(request, 'account.schedulable', 'failed', params.id, { schedulable: body.schedulable })
+      throw error
+    }
   })
 
   app.delete('/api/accounts/:id', async (request, reply) => {

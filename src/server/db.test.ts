@@ -13,6 +13,24 @@ afterEach(() => {
 })
 
 describe('database rollback migrations', () => {
+  it('adds scheduling state to an existing database and persists manual pauses across restarts', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-scheduling-migration-'))
+    directories.push(directory)
+    let db = openDatabase(directory)
+    db.prepare(`INSERT INTO managed_accounts(id, email_normalized, email_display, created_at, updated_at)
+      VALUES ('paused-account', 'paused@example.com', 'paused@example.com', ?, ?)`)
+      .run(new Date().toISOString(), new Date().toISOString())
+    db.exec('ALTER TABLE managed_accounts DROP COLUMN scheduling_paused')
+    db.close()
+    db = openDatabase(directory)
+    expect(db.prepare("SELECT scheduling_paused FROM managed_accounts WHERE id = 'paused-account'").get()).toEqual({ scheduling_paused: 0 })
+    db.prepare("UPDATE managed_accounts SET scheduling_paused = 1 WHERE id = 'paused-account'").run()
+    db.close()
+    db = openDatabase(directory)
+    expect(db.prepare("SELECT scheduling_paused FROM managed_accounts WHERE id = 'paused-account'").get()).toEqual({ scheduling_paused: 1 })
+    db.close()
+  })
+
   it('removes profit schema while preserving existing account data', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-db-rollback-'))
     directories.push(directory)

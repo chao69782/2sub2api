@@ -15,6 +15,7 @@ interface AccountRow {
   auth_status: ManagedAccount['authStatus']
   health_status: ManagedAccount['healthStatus']
   sync_status: ManagedAccount['syncStatus']
+  scheduling_paused: number
   remote_account_id: number | null
   remote_name: string | null
   totp_rotated_at: string | null
@@ -59,7 +60,7 @@ function usageRemainingSeconds(window: UsageWindowSnapshot | null | undefined): 
 }
 
 function mapAccount(row: AccountRow): ManagedAccount {
-  let usage: { status?: unknown; five_hour?: UsageWindowSnapshot | null; seven_day?: UsageWindowSnapshot | null } = {}
+  let usage: { status?: unknown; schedulable?: unknown; five_hour?: UsageWindowSnapshot | null; seven_day?: UsageWindowSnapshot | null } = {}
   let importOverrides: AccountImportOverrides | null = null
   try { usage = JSON.parse(row.last_snapshot_json || '{}') as typeof usage } catch { /* ignore malformed snapshots */ }
   try {
@@ -77,6 +78,8 @@ function mapAccount(row: AccountRow): ManagedAccount {
     healthStatus: row.health_status,
     syncStatus: row.sync_status,
     sub2apiStatus: typeof usage.status === 'string' ? usage.status : null,
+    sub2apiSchedulable: typeof usage.schedulable === 'boolean' ? usage.schedulable : null,
+    schedulingPaused: row.scheduling_paused === 1,
     sub2apiAccountId: row.remote_account_id,
     totpRotatedAt: row.totp_rotated_at,
     totpRotationStatus: row.totp_rotation_job_status,
@@ -285,7 +288,7 @@ export class AccountRepository {
       .run(accountName.trim(), now(), accountId)
   }
 
-  linkRemote(accountId: string, remote: { id: number; name?: string; expiresAt?: string | null }, proxyId: number | null): void {
+  linkRemote(accountId: string, remote: { id: number; name?: string; expiresAt?: string | null; schedulable?: boolean }, proxyId: number | null): void {
     const timestamp = now()
     const transaction = this.db.transaction(() => {
       this.db.prepare(`
@@ -358,6 +361,11 @@ export class AccountRepository {
 
   setSyncStatus(accountId: string, status: ManagedAccount['syncStatus']): void {
     this.db.prepare('UPDATE managed_accounts SET sync_status = ?, updated_at = ? WHERE id = ?').run(status, now(), accountId)
+  }
+
+  setSchedulingPaused(accountId: string, paused: boolean): void {
+    this.db.prepare('UPDATE managed_accounts SET scheduling_paused = ?, updated_at = ? WHERE id = ?')
+      .run(paused ? 1 : 0, now(), accountId)
   }
 
   createOAuthSession(input: { accountId: string; sub2apiSessionId: string; state: string; proxyId: number | null; authUrl: string }): string {

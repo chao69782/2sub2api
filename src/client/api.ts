@@ -42,6 +42,9 @@ export const api = {
   importAccounts(text: string) { return request<{ created: ManagedAccount[]; errors: Array<{ line: number; message: string }> }>('/api/accounts/import', { method: 'POST', body: JSON.stringify({ text }) }) },
   updateAccount(id: string, body: Record<string, unknown>) { return request<ManagedAccount>(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) }) },
   rotateTotp(id: string) { return request(`/api/accounts/${id}/totp/rotate`, { method: 'POST' }) },
+  setAccountSchedulable(id: string, schedulable: boolean) {
+    return request<ManagedAccount>(`/api/accounts/${id}/schedulable`, { method: 'POST', body: JSON.stringify({ schedulable }) })
+  },
   viewCredentials(id: string) {
     return request<{ email: string; password: string; totpSecret: string }>(`/api/accounts/${id}/credentials/view`, { method: 'POST', cache: 'no-store' })
   },

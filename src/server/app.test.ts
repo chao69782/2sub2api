@@ -1,17 +1,21 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AccountImportOverrides, ManagedAccount } from '../shared/types.js'
 import type { AppConfig } from './config.js'
 import { SecretCipher } from './crypto.js'
 import { openDatabase, type WorkbenchDatabase } from './db.js'
 import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate, estimateAccountUsageAvailability, resolveAccountImportDefaults } from './app.js'
 import { AccountRepository } from './repositories.js'
+import { Sub2APIClient, Sub2APIError } from './sub2api.js'
+import { OpenAIAuthDriver } from './openai-auth-driver.js'
 
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => {
   while (cleanup.length) await cleanup.pop()?.()
+  vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 function config(directory: string): AppConfig {
@@ -328,7 +332,102 @@ describe('administrator session protection', () => {
   })
 })
 
+describe('account scheduling', () => {
+  async function setup() {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-scheduling-'))
+    const appConfig = config(directory)
+    const db = openDatabase(directory)
+    const app = await buildApp(appConfig, db)
+    cleanup.push(async () => { await app.close(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) })
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'test-password' } })
+    const setCookie = login.headers['set-cookie']
+    const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!
+    const headers = { cookie, 'x-csrf-token': login.json().csrfToken }
+    const repository = new AccountRepository(db, new SecretCipher(appConfig.masterKey))
+    const account = repository.create({ email: 'scheduled@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    repository.linkRemote(account.id, { id: 101, name: 'Scheduled', schedulable: true }, null)
+    repository.syncRemote(account.id, { id: 101, name: 'Scheduled', five_hour: { utilization: 20, remaining_seconds: 9_000 } })
+    repository.markHealth(account.id, { status: 'healthy' })
+    const remote = { id: 101, name: 'Scheduled', status: 'active', credentials: { email: account.email } }
+    const setSchedulable = vi.spyOn(Sub2APIClient.prototype, 'setAccountSchedulable')
+      .mockImplementation(async (_id, schedulable) => ({ ...remote, schedulable }))
+    return { app, db, headers, repository, account, remote, setSchedulable }
+  }
+
+  it('pauses and resumes remote scheduling, immediately updating the remaining-time estimate', async () => {
+    const { app, headers, repository, account, setSchedulable } = await setup()
+    const url = `/api/accounts/${account.id}/schedulable`
+    const before = (await app.inject({ method: 'GET', url: '/api/accounts', headers })).json().usageSummary
+    const forbidden = await app.inject({ method: 'POST', url, headers: { cookie: headers.cookie }, payload: { schedulable: false } })
+    expect(forbidden.statusCode).toBe(403)
+    expect(setSchedulable).not.toHaveBeenCalled()
+
+    const paused = await app.inject({ method: 'POST', url, headers, payload: { schedulable: false } })
+    expect(paused.statusCode).toBe(200)
+    expect(setSchedulable).toHaveBeenLastCalledWith(101, false)
+    expect(paused.json()).toMatchObject({ schedulingPaused: true, sub2apiSchedulable: false, usageFiveHourPercent: 20 })
+    expect(repository.get(account.id)?.schedulingPaused).toBe(true)
+    const pausedSummary = (await app.inject({ method: 'GET', url: '/api/accounts', headers })).json().usageSummary
+    expect(pausedSummary.availability).toMatchObject({ status: 'insufficient_data', sampleCount: 0 })
+    expect(pausedSummary.fiveHour).toEqual(before.fiveHour)
+
+    const resumed = await app.inject({ method: 'POST', url, headers, payload: { schedulable: true } })
+    expect(resumed.statusCode).toBe(200)
+    expect(setSchedulable).toHaveBeenLastCalledWith(101, true)
+    expect(resumed.json()).toMatchObject({ schedulingPaused: false, sub2apiSchedulable: true })
+    const restored = (await app.inject({ method: 'GET', url: '/api/accounts', headers })).json().usageSummary
+    expect(restored.availability).toEqual(before.availability)
+  })
+
+  it('leaves scheduling unchanged on remote failure and rejects unsupported requests', async () => {
+    const { app, headers, repository, account, setSchedulable } = await setup()
+    const url = `/api/accounts/${account.id}/schedulable`
+    const invalid = await app.inject({ method: 'POST', url, headers, payload: { schedulable: 'false' } })
+    expect(invalid.statusCode).toBe(400)
+    const unlinked = repository.create({ email: 'unlinked@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    const unsupported = await app.inject({ method: 'POST', url: `/api/accounts/${unlinked.id}/schedulable`, headers, payload: { schedulable: false } })
+    expect(unsupported.statusCode).toBe(400)
+    expect(unsupported.json().code).toBe('ACCOUNT_NOT_SYNCED')
+    const missing = await app.inject({ method: 'POST', url: '/api/accounts/00000000-0000-4000-8000-000000000000/schedulable', headers, payload: { schedulable: false } })
+    expect(missing.statusCode).toBe(404)
+    expect(setSchedulable).not.toHaveBeenCalled()
+    setSchedulable.mockRejectedValue(new Sub2APIError(502, 'SUB2API_UNAVAILABLE', '无法连接 Sub2API'))
+    const failed = await app.inject({ method: 'POST', url, headers, payload: { schedulable: false } })
+    expect(failed.statusCode).toBe(502)
+    expect(repository.get(account.id)).toMatchObject({ schedulingPaused: false, sub2apiSchedulable: true })
+  })
+
+  it.each([true, false])('preserves manual pause=%s after reauthorization', async (paused) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    const { app, headers, repository, account, remote, setSchedulable } = await setup()
+    repository.setSchedulingPaused(account.id, paused)
+    repository.syncRemote(account.id, { id: remote.id, name: remote.name, schedulable: false })
+    vi.spyOn(Sub2APIClient.prototype, 'listOpenAIAccounts').mockResolvedValue({ items: [{ ...remote, schedulable: !paused }], total: 1 })
+    vi.spyOn(Sub2APIClient.prototype, 'listProxies').mockResolvedValue([])
+    vi.spyOn(Sub2APIClient.prototype, 'generateOpenAIAuthUrl').mockResolvedValue({ auth_url: 'https://auth.openai.com/authorize?state=test-state', session_id: 'test-session' })
+    vi.spyOn(OpenAIAuthDriver.prototype, 'authorize').mockResolvedValue('http://localhost:1455/auth/callback?code=test-code&state=test-state')
+    vi.spyOn(Sub2APIClient.prototype, 'exchangeCode').mockResolvedValue({ access_token: 'test-token' })
+    vi.spyOn(Sub2APIClient.prototype, 'applyOAuthCredentials').mockResolvedValue(remote)
+    vi.spyOn(Sub2APIClient.prototype, 'updateAccount').mockResolvedValue(remote)
+    vi.spyOn(Sub2APIClient.prototype, 'clearAccountError').mockResolvedValue(remote)
+    vi.spyOn(Sub2APIClient.prototype, 'queryAccountUsage').mockResolvedValue({ five_hour: { utilization: 20, remaining_seconds: 9_000 } })
+    const queued = await app.inject({ method: 'POST', url: `/api/accounts/${account.id}/authorize/auto`, headers, payload: { accountName: remote.name } })
+    expect(queued.statusCode).toBe(202)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(setSchedulable).toHaveBeenLastCalledWith(101, !paused)
+    expect(repository.get(account.id)).toMatchObject({ schedulingPaused: paused, sub2apiSchedulable: !paused, lastAuthorizationStatus: 'completed' })
+  })
+})
+
 describe('account usage summary', () => {
+  it('excludes both manually paused and remotely paused accounts from the time estimate', () => {
+    const active = { usageFiveHourPercent: 10, usageFiveHourRemainingSeconds: 9_000, sub2apiSchedulable: true, schedulingPaused: false } as ManagedAccount
+    const pausedLocally = { ...active, schedulingPaused: true, usageFiveHourPercent: 90 }
+    const pausedRemotely = { ...active, sub2apiSchedulable: false, usageFiveHourPercent: 95 }
+    expect(estimateAccountUsageAvailability([active, pausedLocally, pausedRemotely])).toEqual(estimateAccountUsageAvailability([active]))
+    expect(estimateAccountUsageAvailability([pausedLocally, pausedRemotely])).toMatchObject({ status: 'insufficient_data', sampleCount: 0, remainingSeconds: null })
+  })
+
   it('estimates whether current consumption reaches a limit before the window resets', () => {
     const account = (input: Partial<ManagedAccount>) => input as ManagedAccount
     expect(estimateAccountUsageAvailability([account({

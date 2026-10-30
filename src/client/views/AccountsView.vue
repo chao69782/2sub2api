@@ -34,7 +34,7 @@
       <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 id="usage-summary-title" class="text-sm font-semibold text-slate-900">总体用量窗口</h2>
-          <p class="mt-1 text-xs leading-5 text-slate-500">用量均值和预计剩余可用时间仅统计已授权、同步正常且健康的账号；已耗尽的账号不参与统计，未查询的窗口不参与平均。</p>
+          <p class="mt-1 text-xs leading-5 text-slate-500">用量均值和预计剩余可用时间仅统计已授权、同步正常且健康的账号；已耗尽的账号不参与统计，未查询的窗口不参与平均。预计剩余可用时间排除已暂停调度的账号。</p>
         </div>
         <span v-if="usageSummary" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
       </div>
@@ -75,6 +75,7 @@
             <div class="min-w-0">
               <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
               <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
+              <span v-if="isSchedulingPaused(account)" class="badge mt-1 bg-amber-50 text-amber-800">已暂停调度</span>
               <div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div>
             </div>
             <dl class="grid grid-cols-3 gap-2 text-xs">
@@ -98,6 +99,9 @@
             <div class="text-xs text-slate-500">最近检查：{{ formatTime(account.lastCheckAt) }}</div>
             <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
               <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
+              <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
+                <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
+              </button>
               <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
               <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
@@ -106,7 +110,7 @@
           </article>
         </div>
         <div class="hidden overflow-x-auto md:block">
-        <table class="min-w-[1520px] w-full table-fixed text-left text-sm">
+        <table class="min-w-[1570px] w-full table-fixed text-left text-sm">
           <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
               <th class="w-[54px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
@@ -118,14 +122,14 @@
               <th class="w-[112px] px-2 py-3 text-center">健康</th>
               <th class="w-[100px] px-4 py-3 text-center">同步</th>
               <th class="w-[150px] px-4 py-3">最近检查</th>
-              <th class="sticky right-0 z-20 w-[270px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
+              <th class="sticky right-0 z-20 w-[320px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50">
               <td class="px-4 py-3"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /></td>
               <td class="truncate px-4 py-3 font-medium" :title="account.email">{{ account.email }}<div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div></td>
-              <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}</td>
+              <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}<div v-if="isSchedulingPaused(account)" class="mt-1"><span class="badge bg-amber-50 text-amber-800">已暂停调度</span></div></td>
               <td class="px-4 py-3" :title="authorizationResult(account).title">
                 <div class="font-medium" :class="authorizationResult(account).tone">{{ authorizationResult(account).label }}</div>
                 <div class="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-slate-500">{{ authorizationResult(account).detail }}</div>
@@ -153,6 +157,9 @@
               <td class="sticky right-0 z-10 border-l border-slate-200 bg-white px-4 py-3 group-hover:bg-slate-50">
                 <div class="flex justify-end gap-1">
                   <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
+                  <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
+                    <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
+                  </button>
                   <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
@@ -306,8 +313,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Bot, Clock3, Download, Eye, KeyRound, LoaderCircle, Pencil, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
-import { displayHealthStatus } from '../../shared/account-status'
+import { Bot, Clock3, Download, Eye, KeyRound, LoaderCircle, Pause, Pencil, Play, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
+import { displayHealthStatus, isSchedulingPaused } from '../../shared/account-status'
 import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
 import ModalDialog from '../components/ModalDialog.vue'
@@ -361,6 +368,7 @@ const allSelected = computed(() => accounts.value.length > 0 && accounts.value.e
 const loading = ref(false)
 const importing = ref(false)
 const authorizing = ref(false)
+const changingSchedulingIds = ref(new Set<string>())
 const search = ref('')
 const hasListFilter = computed(() => Boolean(search.value.trim() || healthStatusFilter.value))
 const error = ref('')
@@ -465,6 +473,25 @@ async function refreshAccounts(showLoading: boolean) {
   }
 }
 async function load() { await refreshAccounts(true) }
+function schedulingActionLabel(account: ManagedAccount): string {
+  if (!account.sub2apiAccountId) return '授权后可调整调度'
+  if (changingSchedulingIds.value.has(account.id)) return '正在更新调度'
+  return isSchedulingPaused(account) ? '恢复调度' : '暂停调度'
+}
+async function toggleScheduling(account: ManagedAccount) {
+  if (!account.sub2apiAccountId || changingSchedulingIds.value.has(account.id)) return
+  const schedulable = isSchedulingPaused(account)
+  changingSchedulingIds.value.add(account.id)
+  try {
+    await api.setAccountSchedulable(account.id, schedulable)
+    setResult(`${account.email} 已${schedulable ? '恢复' : '暂停'}调度`)
+    await refreshAccounts(false)
+  } catch (e) {
+    setResult(e instanceof Error ? e.message : '更新调度状态失败', true)
+  } finally {
+    changingSchedulingIds.value.delete(account.id)
+  }
+}
 function resetPageAndLoad() { window.clearTimeout(searchTimer); page.value = 1; void load() }
 function changePage(nextPage: number) { if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return; page.value = nextPage; void load() }
 async function loadAuthorizationMetadata() {

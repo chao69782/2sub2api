@@ -87,6 +87,8 @@ export interface ManagedAccount {
   healthStatus: HealthStatus
   syncStatus: SyncStatus
   sub2apiStatus: string | null
+  sub2apiSchedulable: boolean | null
+  schedulingPaused: boolean
   sub2apiAccountId: number | null
   totpRotatedAt: string | null
   totpRotationStatus: AuthorizationJobStatus | null
