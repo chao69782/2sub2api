@@ -75,12 +75,11 @@
             <div class="min-w-0">
               <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
               <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
-              <span v-if="isSchedulingPaused(account)" class="badge mt-1 bg-amber-50 text-amber-800">已暂停调度</span>
               <div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div>
             </div>
             <dl class="grid grid-cols-3 gap-2 text-xs">
               <div><dt class="mb-1 text-slate-500">自动重授权次数</dt><dd>{{ account.autoReauthorizationCount }}</dd></div>
-              <div><dt class="mb-1 text-slate-500">健康</dt><dd><StatusBadge :value="displayHealthStatus(account)" /></dd></div>
+              <div><dt class="mb-1 text-slate-500">健康</dt><dd class="flex flex-col items-start gap-1"><StatusBadge :value="displayHealthStatus(account)" /><span v-if="isSchedulingPaused(account)" class="badge bg-amber-50 text-amber-800">已暂停调度</span></dd></div>
               <div><dt class="mb-1 text-slate-500">同步</dt><dd><StatusBadge :value="account.syncStatus" /></dd></div>
             </dl>
             <div class="rounded-md bg-slate-50 px-3 py-2 text-xs">
@@ -129,7 +128,7 @@
             <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50">
               <td class="px-4 py-3"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /></td>
               <td class="truncate px-4 py-3 font-medium" :title="account.email">{{ account.email }}<div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div></td>
-              <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}<div v-if="isSchedulingPaused(account)" class="mt-1"><span class="badge bg-amber-50 text-amber-800">已暂停调度</span></div></td>
+              <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}</td>
               <td class="px-4 py-3" :title="authorizationResult(account).title">
                 <div class="font-medium" :class="authorizationResult(account).tone">{{ authorizationResult(account).label }}</div>
                 <div class="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-slate-500">{{ authorizationResult(account).detail }}</div>
@@ -146,6 +145,7 @@
               <td class="px-2 py-3 align-middle text-center">
                 <div class="flex min-w-0 flex-col items-center justify-center">
                   <StatusBadge :value="displayHealthStatus(account)" />
+                  <span v-if="isSchedulingPaused(account)" class="badge mt-1.5 bg-amber-50 text-amber-800">已暂停调度</span>
                   <div v-if="account.sub2apiStatus?.toLowerCase() === 'error'" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600">Sub2API 账号错误</div>
                   <div v-else-if="displayHealthStatus(account) !== 'healthy' && account.lastErrorSummary" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600" :title="account.lastErrorSummary">
                     {{ shortError(account.lastErrorSummary) }}
