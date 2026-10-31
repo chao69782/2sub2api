@@ -626,9 +626,18 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
           pendingTotpSecret: accounts.getPendingTotpSecret(account.id),
           stageSecret: (secret) => accounts.stageTotpSecret(account.id, secret)
         })
-        accounts.promoteStagedTotpSecret(account.id)
-        jobs.complete(job.id)
-        systemAudit('worker.totp_rotate', 'success', account.id)
+        const authorizationJob = db.transaction(() => {
+          const updated = accounts.promoteStagedTotpSecret(account.id)
+          const queued = jobs.enqueue({
+            accountId: account.id, type: 'authorize',
+            payload: { accountName: updated.sub2apiAccountName || updated.email, automatic: false },
+            maxAttempts: 2
+          })
+          accounts.setOAuthPending(account.id, updated.selectedProxyId)
+          jobs.complete(job.id)
+          return queued
+        })()
+        systemAudit('worker.totp_rotate', 'success', account.id, { authorizationJobId: authorizationJob.id })
       } catch (error) {
         const manual = error instanceof ManualActionRequiredError
         const code = manual ? error.code : 'TOTP_ROTATION_FAILED'

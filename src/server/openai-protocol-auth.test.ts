@@ -2,7 +2,8 @@ import { authenticator } from 'otplib'
 import { describe, expect, it, vi } from 'vitest'
 import type { ChromeHttpResponse } from './chrome-http.js'
 import { CookieJar } from './cookie-jar.js'
-import { finishChatGptOAuth, rotateTotpInAuthenticatedSession, startChatGptLogin } from './openai-protocol-auth.js'
+import { finishChatGptOAuth, rotateTotpInAuthenticatedSession, rotateTotpWithSessionReset, startChatGptLogin } from './openai-protocol-auth.js'
+import { ManualActionRequiredError } from './openai-auth-errors.js'
 
 function authResponse(status: number, json: unknown, headers: Record<string, string> = {}): ChromeHttpResponse {
   return { status, url: 'https://chatgpt.com/', text: JSON.stringify(json), headers: new Headers(headers), json: () => json as Record<string, unknown> }
@@ -126,6 +127,93 @@ describe('ChatGPT login continuation', () => {
     const completed = await finishChatGptOAuth(client, 'https://auth.openai.com/workspace', {}, {}, {})
     expect(completed.url).toBe('https://chatgpt.com/')
     expect(selectedId).toBe('selected-workspace')
+  })
+})
+
+describe('2FA rotation with device logout', () => {
+  const oldSecret = 'JBSWY3DPEHPK3PXP'
+  const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
+
+  function freshSession(events: string[]) {
+    const responses = [
+      { status: 200, json: { factors: { totp: [{ id: 'old-factor' }] } } },
+      { status: 200, json: {} },
+      { status: 200, json: { session_id: 'new-session', secret: newSecret } },
+      { status: 200, json: {} },
+      { status: 200, json: { mfa_enabled_v2: true, factors: { totp: [{ id: 'new-factor' }] } } }
+    ]
+    return {
+      mfaVerified: true,
+      api: vi.fn(async (path: string) => { events.push(path); return responses.shift()! })
+    }
+  }
+
+  it('logs in, logs out all devices, logs in again, then rotates using only the fresh session', async () => {
+    const events: string[] = []
+    const stale = { mfaVerified: true, api: vi.fn(async () => { events.push('logout-all'); return { status: 200, json: {} } }) }
+    const fresh = freshSession(events)
+    const login = vi.fn(async (_secret: string) => { events.push('login'); return events.length === 1 ? stale : fresh })
+    await rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret: (secret) => { expect(secret).toBe(newSecret); events.push('stage') } }, login)
+    expect(login.mock.calls.map(([secret]) => secret)).toEqual([oldSecret, oldSecret])
+    expect(stale.api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    expect(events).toEqual([
+      'login', 'logout-all', 'login', '/accounts/mfa_info', '/accounts/mfa/user/disable_in_house',
+      '/accounts/mfa/enroll', 'stage', '/accounts/mfa/user/activate_enrollment', '/accounts/mfa_info'
+    ])
+  })
+
+  it.each([302, 401, 403, 500])('stops before re-login or 2FA changes when logout returns HTTP %s', async (status) => {
+    const api = vi.fn(async () => ({ status, json: {} }))
+    const login = vi.fn(async () => ({ mfaVerified: true, api }))
+    const stageSecret = vi.fn()
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret }, login))
+      .rejects.toMatchObject({ code: 'CHATGPT_LOGOUT_ALL_FAILED' })
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    expect(stageSecret).not.toHaveBeenCalled()
+  })
+
+  it('does not continue when the fresh login fails after logout', async () => {
+    const api = vi.fn(async () => ({ status: 204, json: {} }))
+    const login = vi.fn().mockResolvedValueOnce({ mfaVerified: true, api })
+      .mockRejectedValueOnce(new ManualActionRequiredError('需要邮箱验证', 'EMAIL_VERIFICATION_REQUIRED'))
+    const stageSecret = vi.fn()
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret }, login))
+      .rejects.toMatchObject({ code: 'EMAIL_VERIFICATION_REQUIRED', message: expect.stringContaining('重新登录失败') })
+    expect(login).toHaveBeenCalledTimes(2)
+    expect(api).toHaveBeenCalledTimes(1)
+    expect(stageSecret).not.toHaveBeenCalled()
+  })
+
+  it('logs out and re-verifies an already activated pending secret without rotating it again', async () => {
+    const staleApi = vi.fn(async () => ({ status: 200, json: {} }))
+    const freshApi = vi.fn()
+    const login = vi.fn().mockResolvedValueOnce({ mfaVerified: true, api: staleApi }).mockResolvedValueOnce({ mfaVerified: true, api: freshApi })
+    const stageSecret = vi.fn()
+    await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret }, login)
+    expect(login.mock.calls).toEqual([[newSecret], [newSecret]])
+    expect(staleApi).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    expect(freshApi).not.toHaveBeenCalled()
+    expect(stageSecret).not.toHaveBeenCalled()
+  })
+
+  it('falls back from an inactive pending secret and reuses the successful old secret for fresh login', async () => {
+    const staleApi = vi.fn(async () => ({ status: 200, json: {} }))
+    const login = vi.fn().mockRejectedValueOnce(new ManualActionRequiredError('2FA 验证失败', 'MFA_VERIFICATION_FAILED'))
+      .mockResolvedValueOnce({ mfaVerified: true, api: staleApi }).mockResolvedValueOnce(freshSession([]))
+    const stageSecret = vi.fn()
+    await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret }, login)
+    expect(login.mock.calls).toEqual([[newSecret], [oldSecret], [oldSecret]])
+    expect(stageSecret).toHaveBeenCalledExactlyOnceWith(newSecret)
+  })
+
+  it('does not retry with another secret on a login security failure', async () => {
+    const login = vi.fn().mockRejectedValue(new ManualActionRequiredError('安全验证', 'OPENAI_SECURITY_CHALLENGE'))
+    const stageSecret = vi.fn()
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret }, login))
+      .rejects.toMatchObject({ code: 'OPENAI_SECURITY_CHALLENGE' })
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(stageSecret).not.toHaveBeenCalled()
   })
 })
 

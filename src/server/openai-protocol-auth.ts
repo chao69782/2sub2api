@@ -638,15 +638,15 @@ async function loginChatGpt(input: Omit<ProtocolAuthInput, 'authUrl'>): Promise<
 
 interface MfaApiResponse { status: number; json: JsonRecord }
 
-async function mfaApi(session: ChatGptSession, path: string, body?: JsonRecord): Promise<MfaApiResponse> {
+async function chatGptApi(session: ChatGptSession, path: string, body?: JsonRecord, method: 'GET' | 'POST' = body ? 'POST' : 'GET'): Promise<MfaApiResponse> {
   const response = await session.client.request(`https://chatgpt.com/backend-api${path}`, {
-    method: body ? 'POST' : 'GET',
+    method,
     headers: {
       ...session.client.navigateHeaders('https://chatgpt.com/#settings/Security'),
       accept: 'application/json',
       authorization: `Bearer ${session.accessToken}`,
-      ...(body ? {
-        'content-type': 'application/json',
+      ...(method === 'POST' ? {
+        ...(body ? { 'content-type': 'application/json' } : {}),
         origin: 'https://chatgpt.com',
         'sec-fetch-site': 'same-origin',
         'sec-fetch-mode': 'cors',
@@ -705,19 +705,57 @@ export async function rotateTotpInAuthenticatedSession(
   throw new ManualActionRequiredError('新 2FA 激活结果尚未确认；请重试更换操作', 'MFA_CONFIRM_FAILED')
 }
 
-export async function rotateTotpWithSentinel(input: Omit<ProtocolAuthInput, 'authUrl'> & {
+interface TotpRotationState {
+  totpSecret: string
   pendingTotpSecret?: string | null
   stageSecret: (secret: string) => void
-}): Promise<void> {
-  let session: ChatGptSession | null = null
+}
+
+interface TotpRotationSession {
+  mfaVerified: boolean
+  api: (path: string, body?: JsonRecord, method?: 'GET' | 'POST') => Promise<MfaApiResponse>
+}
+
+export async function rotateTotpWithSessionReset(
+  input: TotpRotationState,
+  login: (totpSecret: string) => Promise<TotpRotationSession>
+): Promise<void> {
+  let session: TotpRotationSession | null = null
+  let loginSecret = input.totpSecret
+  let recoveringActivatedSecret = false
   if (input.pendingTotpSecret) {
     try {
-      session = await loginChatGpt({ ...input, totpSecret: input.pendingTotpSecret })
-      if (session.mfaVerified) return
+      session = await login(input.pendingTotpSecret)
+      loginSecret = input.pendingTotpSecret
+      recoveringActivatedSecret = session.mfaVerified
     } catch (error) {
       if (!(error instanceof ManualActionRequiredError && error.code === 'MFA_VERIFICATION_FAILED')) throw error
     }
   }
-  session ??= await loginChatGpt(input)
-  await rotateTotpInAuthenticatedSession((path, body) => mfaApi(session, path, body), input.stageSecret)
+  session ??= await login(loginSecret)
+  // Matches ChatGPT's Security > Active sessions action, including the current session.
+  const loggedOut = await session.api('/accounts/logout_all', undefined, 'POST')
+  if (loggedOut.status < 200 || loggedOut.status >= 300) {
+    throw new ManualActionRequiredError(`退出所有登录设备失败（HTTP ${loggedOut.status}），未继续更换 2FA`, 'CHATGPT_LOGOUT_ALL_FAILED')
+  }
+  let freshSession: TotpRotationSession
+  try {
+    freshSession = await login(loginSecret)
+  } catch (error) {
+    const message = `已提交退出所有设备，但重新登录失败，未继续更换 2FA：${error instanceof Error ? error.message : '未知错误'}`
+    if (error instanceof ManualActionRequiredError) throw new ManualActionRequiredError(message, error.code)
+    throw new Error(message)
+  }
+  if (recoveringActivatedSecret && freshSession.mfaVerified) return
+  await rotateTotpInAuthenticatedSession(freshSession.api, input.stageSecret)
+}
+
+export async function rotateTotpWithSentinel(input: Omit<ProtocolAuthInput, 'authUrl'> & TotpRotationState): Promise<void> {
+  await rotateTotpWithSessionReset(input, async (totpSecret) => {
+    const session = await loginChatGpt({ ...input, totpSecret })
+    return {
+      mfaVerified: session.mfaVerified,
+      api: (path, body, method) => chatGptApi(session, path, body, method)
+    }
+  })
 }

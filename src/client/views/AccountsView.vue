@@ -101,7 +101,7 @@
               <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
                 <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
               </button>
-              <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
+              <button class="icon-button" title="退出所有设备、更换 2FA 并导入 Sub2API" aria-label="退出所有设备、更换 2FA 并导入 Sub2API" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
               <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
@@ -160,7 +160,7 @@
                   <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
                     <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
                   </button>
-                  <button class="icon-button" title="更换 2FA" aria-label="更换 2FA" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
+                  <button class="icon-button" title="退出所有设备、更换 2FA 并导入 Sub2API" aria-label="退出所有设备、更换 2FA 并导入 Sub2API" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
@@ -548,7 +548,7 @@ function totpRotationLabel(account: ManagedAccount): string {
 async function startTotpRotation(account: ManagedAccount) {
   try {
     await api.rotateTotp(account.id)
-    setResult(`${account.email} 的 2FA 更换任务已开始`)
+    setResult(`${account.email} 的退出设备和 2FA 更换任务已开始，完成后自动导入 Sub2API`)
     await load()
   } catch (e) { setResult(e instanceof Error ? e.message : '启动 2FA 更换失败', true) }
 }

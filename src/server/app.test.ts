@@ -9,7 +9,7 @@ import { openDatabase, type WorkbenchDatabase } from './db.js'
 import { buildApp, buildModelRestrictionMapping, buildSub2apiCredentialsUpdate, buildSub2apiEmailCredentialUpdate, estimateAccountUsageAvailability, resolveAccountImportDefaults } from './app.js'
 import { AccountRepository } from './repositories.js'
 import { Sub2APIClient, Sub2APIError } from './sub2api.js'
-import { OpenAIAuthDriver } from './openai-auth-driver.js'
+import { ManualActionRequiredError, OpenAIAuthDriver } from './openai-auth-driver.js'
 
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -332,7 +332,7 @@ describe('administrator session protection', () => {
   })
 })
 
-describe('account scheduling', () => {
+describe('account operations', () => {
   async function setup() {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-workbench-scheduling-'))
     const appConfig = config(directory)
@@ -395,6 +395,84 @@ describe('account scheduling', () => {
     const failed = await app.inject({ method: 'POST', url, headers, payload: { schedulable: false } })
     expect(failed.statusCode).toBe(502)
     expect(repository.get(account.id)).toMatchObject({ schedulingPaused: false, sub2apiSchedulable: true })
+  })
+
+  it.each([
+    { linked: true, importFails: false },
+    { linked: false, importFails: false },
+    { linked: false, importFails: true }
+  ])('imports only after persisting the confirmed new 2FA: %j', async ({ linked, importFails }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    const { app, db, headers, repository, account: existing, remote, setSchedulable } = await setup()
+    const account = linked ? existing : repository.create({ email: 'new-rotation@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
+    const events: string[] = []
+    if (linked) repository.setSchedulingPaused(account.id, true)
+    const rotated = vi.spyOn(OpenAIAuthDriver.prototype, 'rotateTotp').mockImplementation(async (input) => {
+      events.push('rotate')
+      input.stageSecret(newSecret)
+      expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXP')
+      events.push('confirmed')
+    })
+    vi.spyOn(Sub2APIClient.prototype, 'listOpenAIAccounts').mockResolvedValue({ items: [remote], total: 1 })
+    vi.spyOn(Sub2APIClient.prototype, 'listProxies').mockResolvedValue([])
+    vi.spyOn(Sub2APIClient.prototype, 'generateOpenAIAuthUrl').mockImplementation(async () => {
+      expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
+      expect(repository.getPendingTotpSecret(account.id)).toBeNull()
+      events.push('oauth-start')
+      return { auth_url: 'https://auth.openai.com/authorize?state=after-rotation', session_id: 'rotation-oauth' }
+    })
+    const authorize = vi.spyOn(OpenAIAuthDriver.prototype, 'authorize').mockImplementation(async (input) => {
+      expect(input.totpSecret).toBe(newSecret)
+      events.push('authorize-with-new-2fa')
+      if (importFails) throw new ManualActionRequiredError('需要人工完成邮箱验证', 'EMAIL_VERIFICATION_REQUIRED')
+      return 'http://localhost:1455/auth/callback?code=test-code&state=after-rotation'
+    })
+    const imported = { ...remote, id: linked ? remote.id : 202 }
+    const create = vi.spyOn(Sub2APIClient.prototype, 'createFromOAuth').mockResolvedValue(imported)
+    const apply = vi.spyOn(Sub2APIClient.prototype, 'applyOAuthCredentials').mockResolvedValue(imported)
+    vi.spyOn(Sub2APIClient.prototype, 'exchangeCode').mockResolvedValue({ access_token: 'test-token' })
+    const update = vi.spyOn(Sub2APIClient.prototype, 'updateAccount').mockResolvedValue(imported)
+    vi.spyOn(Sub2APIClient.prototype, 'clearAccountError').mockResolvedValue(imported)
+    setSchedulable.mockImplementation(async (_id, schedulable) => ({ ...imported, schedulable }))
+    vi.spyOn(Sub2APIClient.prototype, 'queryAccountUsage').mockResolvedValue({ five_hour: { utilization: 20, remaining_seconds: 9000 } })
+    const queued = await app.inject({ method: 'POST', url: `/api/accounts/${account.id}/totp/rotate`, headers })
+    expect(queued.statusCode).toBe(202)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(rotated).toHaveBeenCalledTimes(1)
+    expect(events).toEqual(['rotate', 'confirmed'])
+    expect(authorize).not.toHaveBeenCalled()
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', lastAuthorizationStatus: 'pending' })
+    const authJob = db.prepare("SELECT payload_json FROM jobs WHERE account_id = ? AND type = 'authorize'").get(account.id) as { payload_json: string }
+    expect(JSON.parse(authJob.payload_json)).toMatchObject({ accountName: linked ? remote.name : account.email, automatic: false })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(events).toEqual(['rotate', 'confirmed', 'oauth-start', 'authorize-with-new-2fa'])
+    expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', lastAuthorizationStatus: importFails ? 'failed' : 'completed' })
+    if (importFails) {
+      expect(create).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    } else {
+      expect(repository.get(account.id)?.sub2apiAccountId).toBe(imported.id)
+      expect(update).toHaveBeenCalledWith(imported.id, expect.objectContaining({ name: linked ? remote.name : account.email }))
+      expect(setSchedulable).toHaveBeenLastCalledWith(imported.id, !linked)
+      expect(create).toHaveBeenCalledTimes(linked ? 0 : 1)
+      expect(apply).toHaveBeenCalledTimes(linked ? 1 : 0)
+    }
+  })
+
+  it('does not queue an import when the 2FA workflow fails', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    const { app, db, headers, repository, account, remote } = await setup()
+    vi.spyOn(Sub2APIClient.prototype, 'listOpenAIAccounts').mockResolvedValue({ items: [remote], total: 1 })
+    vi.spyOn(OpenAIAuthDriver.prototype, 'rotateTotp').mockRejectedValue(new ManualActionRequiredError('退出所有设备失败', 'CHATGPT_LOGOUT_ALL_FAILED'))
+    const authorize = vi.spyOn(OpenAIAuthDriver.prototype, 'authorize')
+    await app.inject({ method: 'POST', url: `/api/accounts/${account.id}/totp/rotate`, headers })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(repository.get(account.id)?.totpRotationStatus).toBe('failed')
+    expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXP')
+    expect(db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE account_id = ? AND type = 'authorize'").get(account.id)).toEqual({ count: 0 })
+    expect(authorize).not.toHaveBeenCalled()
   })
 
   it.each([true, false])('preserves manual pause=%s after reauthorization', async (paused) => {
