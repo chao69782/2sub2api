@@ -40,7 +40,6 @@ export const api = {
   exportAccounts(ids: string[]) { window.location.assign(`/api/accounts/export.txt?ids=${encodeURIComponent(ids.join(','))}`) },
   previewImport(text: string) { return request<{ rows: Array<Record<string, unknown>>; validCount: number }>('/api/accounts/import/preview', { method: 'POST', body: JSON.stringify({ text }) }) },
   importAccounts(text: string) { return request<{ created: ManagedAccount[]; errors: Array<{ line: number; message: string }> }>('/api/accounts/import', { method: 'POST', body: JSON.stringify({ text }) }) },
-  updateAccount(id: string, body: Record<string, unknown>) { return request<ManagedAccount>(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(body) }) },
   rotateTotp(id: string) { return request(`/api/accounts/${id}/totp/rotate`, { method: 'POST' }) },
   setAccountSchedulable(id: string, schedulable: boolean) {
     return request<ManagedAccount>(`/api/accounts/${id}/schedulable`, { method: 'POST', body: JSON.stringify({ schedulable }) })

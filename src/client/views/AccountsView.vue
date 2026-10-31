@@ -102,7 +102,6 @@
                 <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
               </button>
               <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
-              <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
             </div>
@@ -161,7 +160,6 @@
                     <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
                   </button>
                   <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
-                  <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
                 </div>
@@ -207,15 +205,6 @@
           </div>
         </div>
       </div>
-    </ModalDialog>
-
-    <ModalDialog v-model:open="editOpen" title="编辑账号" width="max-w-lg">
-      <form class="space-y-4" @submit.prevent="saveEdit">
-        <div><label class="label">邮箱</label><input v-model="editForm.email" class="input" type="email" required /></div>
-        <div><label class="label">备注</label><textarea v-model="editForm.notes" class="textarea" rows="3"></textarea></div>
-        <div><label class="label">新密码</label><input v-model="editForm.password" class="input" type="password" autocomplete="new-password" /></div>
-        <div class="flex justify-end gap-2"><button type="button" class="button" @click="editOpen = false">取消</button><button class="button button-primary">保存</button></div>
-      </form>
     </ModalDialog>
 
     <ModalDialog v-model:open="credentialsOpen" title="账号凭据" width="max-w-lg">
@@ -313,7 +302,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Bot, Clock3, Download, Eye, KeyRound, LoaderCircle, Pause, Pencil, Play, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
+import { Bot, Clock3, Download, Eye, KeyRound, LoaderCircle, Pause, Play, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
 import { displayHealthStatus, isSchedulingPaused } from '../../shared/account-status'
 import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
@@ -378,9 +367,6 @@ const importOpen = ref(false)
 const credentialText = ref('')
 const previewRows = ref<Array<Record<string, unknown>>>([])
 const validCount = computed(() => previewRows.value.filter((row) => row.status === 'valid').length)
-const editOpen = ref(false)
-const editingId = ref('')
-const editForm = ref({ email: '', notes: '', password: '' })
 const credentialsOpen = ref(false)
 const credentials = ref<{ email: string; password: string; totpSecret: string } | null>(null)
 watch(credentialsOpen, (open) => {
@@ -532,14 +518,12 @@ function debouncedLoad() { page.value = 1; listRequestId += 1; loading.value = t
 function openImport() { credentialText.value = ''; previewRows.value = []; importOpen.value = true }
 async function preview() { try { const response = await api.previewImport(credentialText.value); previewRows.value = response.rows } catch (e) { setResult(e instanceof Error ? e.message : '预检失败', true) } }
 async function submitImport() { importing.value = true; try { const result = await api.importAccounts(credentialText.value); importOpen.value = false; setResult(`已导入 ${result.created.length} 个账号${result.errors.length ? `，${result.errors.length} 行未导入` : ''}`); await load() } catch (e) { setResult(e instanceof Error ? e.message : '导入失败', true) } finally { importing.value = false } }
-function edit(account: ManagedAccount) { editingId.value = account.id; editForm.value = { email: account.email, notes: account.notes, password: '' }; editOpen.value = true }
 async function openCredentials(account: ManagedAccount) {
   try {
     credentials.value = await api.viewCredentials(account.id)
     credentialsOpen.value = true
   } catch (e) { setResult(e instanceof Error ? e.message : '读取凭据失败', true) }
 }
-async function saveEdit() { try { const body = { ...editForm.value }; if (!body.password) delete (body as Partial<typeof body>).password; await api.updateAccount(editingId.value, body); editOpen.value = false; setResult('账号已更新'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '保存失败', true) } }
 function totpRotationLabel(account: ManagedAccount): string {
   if (account.totpRotationStatus === 'pending') return '2FA 更换：等待执行'
   if (account.totpRotationStatus === 'running') return '2FA 更换：进行中'
