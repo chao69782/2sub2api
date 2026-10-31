@@ -20,6 +20,7 @@ export type HealthStatus =
 export type SyncStatus = 'not_synced' | 'syncing' | 'synced' | 'sync_failed' | 'remote_missing'
 export type ProxyPolicy = 'auto' | 'direct' | 'fixed'
 export type AuthorizationJobStatus = 'pending' | 'running' | 'completed' | 'failed'
+export type TotpRotationStep = 'login' | 'logout_devices' | 'relogin' | 'rotate_totp' | 'save_secret' | 'import_sub2api'
 
 export interface ImportDefaults {
   modelWhitelist: string[]
@@ -93,6 +94,9 @@ export interface ManagedAccount {
   totpRotatedAt: string | null
   totpRotationStatus: AuthorizationJobStatus | null
   totpRotationError: string | null
+  totpRotationStep: TotpRotationStep | null
+  totpRotationImportStatus: AuthorizationJobStatus | null
+  totpRotationImportError: string | null
   sub2apiAccountName: string | null
   selectedProxyId: number | null
   tokenExpiresAt: string | null

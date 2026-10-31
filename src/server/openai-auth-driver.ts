@@ -1,4 +1,5 @@
 import { createFingerprintSession, fingerprintSummaryText, validateBrowserProfile } from './browser-fingerprint.js'
+import type { TotpRotationStep } from '../shared/types.js'
 import { ManualActionRequiredError } from './openai-auth-errors.js'
 import { authorizeWithSentinel, rotateTotpWithSentinel } from './openai-protocol-auth.js'
 
@@ -38,6 +39,7 @@ export class OpenAIAuthDriver {
     totpSecret: string
     pendingTotpSecret: string | null
     stageSecret: (secret: string) => void
+    onStep?: (step: TotpRotationStep) => void
   }): Promise<void> {
     if (this.busy) throw new Error('AUTH_BROWSER_BUSY')
     this.busy = true

@@ -486,7 +486,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
     if (!accounts.get(params.id)) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
     accounts.getSecrets(params.id)
-    const job = jobs.enqueue({ accountId: params.id, type: 'rotate_totp', maxAttempts: 2 })
+    const job = jobs.enqueue({ accountId: params.id, type: 'rotate_totp', payload: { step: 'login' }, maxAttempts: 2 })
     audit(request, 'account.totp.rotate.queued', 'success', params.id, { jobId: job.id })
     return reply.code(202).send({ job })
   })
@@ -624,8 +624,10 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
           email: account.email,
           ...secrets,
           pendingTotpSecret: accounts.getPendingTotpSecret(account.id),
-          stageSecret: (secret) => accounts.stageTotpSecret(account.id, secret)
+          stageSecret: (secret) => accounts.stageTotpSecret(account.id, secret),
+          onStep: (step) => jobs.setTotpRotationStep(job.id, step)
         })
+        jobs.setTotpRotationStep(job.id, 'save_secret')
         const authorizationJob = db.transaction(() => {
           const updated = accounts.promoteStagedTotpSecret(account.id)
           const queued = jobs.enqueue({
@@ -634,6 +636,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
             maxAttempts: 2
           })
           accounts.setOAuthPending(account.id, updated.selectedProxyId)
+          jobs.setTotpRotationStep(job.id, 'import_sub2api', queued.id)
           jobs.complete(job.id)
           return queued
         })()

@@ -4,6 +4,7 @@ import type { ChromeHttpResponse } from './chrome-http.js'
 import { CookieJar } from './cookie-jar.js'
 import { finishChatGptOAuth, rotateTotpInAuthenticatedSession, rotateTotpWithSessionReset, startChatGptLogin } from './openai-protocol-auth.js'
 import { ManualActionRequiredError } from './openai-auth-errors.js'
+import type { TotpRotationStep } from '../shared/types.js'
 
 function authResponse(status: number, json: unknown, headers: Record<string, string> = {}): ChromeHttpResponse {
   return { status, url: 'https://chatgpt.com/', text: JSON.stringify(json), headers: new Headers(headers), json: () => json as Record<string, unknown> }
@@ -153,7 +154,9 @@ describe('2FA rotation with device logout', () => {
     const stale = { mfaVerified: true, api: vi.fn(async () => { events.push('logout-all'); return { status: 200, json: {} } }) }
     const fresh = freshSession(events)
     const login = vi.fn(async (_secret: string) => { events.push('login'); return events.length === 1 ? stale : fresh })
-    await rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret: (secret) => { expect(secret).toBe(newSecret); events.push('stage') } }, login)
+    const progress: TotpRotationStep[] = []
+    await rotateTotpWithSessionReset({ totpSecret: oldSecret, onStep: (step) => progress.push(step), stageSecret: (secret) => { expect(secret).toBe(newSecret); events.push('stage') } }, login)
+    expect(progress).toEqual(['login', 'logout_devices', 'relogin', 'rotate_totp'])
     expect(login.mock.calls.map(([secret]) => secret)).toEqual([oldSecret, oldSecret])
     expect(stale.api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
     expect(events).toEqual([
@@ -166,8 +169,10 @@ describe('2FA rotation with device logout', () => {
     const api = vi.fn(async () => ({ status, json: {} }))
     const login = vi.fn(async () => ({ mfaVerified: true, api }))
     const stageSecret = vi.fn()
-    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret }, login))
+    const progress: TotpRotationStep[] = []
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret, onStep: (step) => progress.push(step) }, login))
       .rejects.toMatchObject({ code: 'CHATGPT_LOGOUT_ALL_FAILED' })
+    expect(progress).toEqual(['login', 'logout_devices'])
     expect(login).toHaveBeenCalledTimes(1)
     expect(api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
     expect(stageSecret).not.toHaveBeenCalled()

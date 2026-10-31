@@ -1,4 +1,5 @@
 import { authenticator } from 'otplib'
+import type { TotpRotationStep } from '../shared/types.js'
 import { SENTINEL_SV, type FingerprintSession } from './browser-fingerprint.js'
 import { chromeRequest } from './chrome-http.js'
 import { CookieJar } from './cookie-jar.js'
@@ -709,6 +710,7 @@ interface TotpRotationState {
   totpSecret: string
   pendingTotpSecret?: string | null
   stageSecret: (secret: string) => void
+  onStep?: (step: TotpRotationStep) => void
 }
 
 interface TotpRotationSession {
@@ -723,6 +725,7 @@ export async function rotateTotpWithSessionReset(
   let session: TotpRotationSession | null = null
   let loginSecret = input.totpSecret
   let recoveringActivatedSecret = false
+  input.onStep?.('login')
   if (input.pendingTotpSecret) {
     try {
       session = await login(input.pendingTotpSecret)
@@ -733,12 +736,14 @@ export async function rotateTotpWithSessionReset(
     }
   }
   session ??= await login(loginSecret)
+  input.onStep?.('logout_devices')
   // Matches ChatGPT's Security > Active sessions action, including the current session.
   const loggedOut = await session.api('/accounts/logout_all', undefined, 'POST')
   if (loggedOut.status < 200 || loggedOut.status >= 300) {
     throw new ManualActionRequiredError(`退出所有登录设备失败（HTTP ${loggedOut.status}），未继续更换 2FA`, 'CHATGPT_LOGOUT_ALL_FAILED')
   }
   let freshSession: TotpRotationSession
+  input.onStep?.('relogin')
   try {
     freshSession = await login(loginSecret)
   } catch (error) {
@@ -746,6 +751,7 @@ export async function rotateTotpWithSessionReset(
     if (error instanceof ManualActionRequiredError) throw new ManualActionRequiredError(message, error.code)
     throw new Error(message)
   }
+  input.onStep?.('rotate_totp')
   if (recoveringActivatedSecret && freshSession.mfaVerified) return
   await rotateTotpInAuthenticatedSession(freshSession.api, input.stageSecret)
 }

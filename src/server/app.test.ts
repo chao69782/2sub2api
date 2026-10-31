@@ -410,6 +410,10 @@ describe('account operations', () => {
     if (linked) repository.setSchedulingPaused(account.id, true)
     const rotated = vi.spyOn(OpenAIAuthDriver.prototype, 'rotateTotp').mockImplementation(async (input) => {
       events.push('rotate')
+      for (const step of ['login', 'logout_devices', 'relogin', 'rotate_totp'] as const) {
+        input.onStep?.(step)
+        expect(repository.get(account.id)?.totpRotationStep).toBe(step)
+      }
       input.stageSecret(newSecret)
       expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXP')
       events.push('confirmed')
@@ -442,13 +446,13 @@ describe('account operations', () => {
     expect(rotated).toHaveBeenCalledTimes(1)
     expect(events).toEqual(['rotate', 'confirmed'])
     expect(authorize).not.toHaveBeenCalled()
-    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', lastAuthorizationStatus: 'pending' })
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', totpRotationStep: 'import_sub2api', totpRotationImportStatus: 'pending', lastAuthorizationStatus: 'pending' })
     const authJob = db.prepare("SELECT payload_json FROM jobs WHERE account_id = ? AND type = 'authorize'").get(account.id) as { payload_json: string }
     expect(JSON.parse(authJob.payload_json)).toMatchObject({ accountName: linked ? remote.name : account.email, automatic: false })
     await vi.advanceTimersByTimeAsync(2000)
     expect(events).toEqual(['rotate', 'confirmed', 'oauth-start', 'authorize-with-new-2fa'])
     expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
-    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', lastAuthorizationStatus: importFails ? 'failed' : 'completed' })
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', totpRotationImportStatus: importFails ? 'failed' : 'completed', lastAuthorizationStatus: importFails ? 'failed' : 'completed' })
     if (importFails) {
       expect(create).not.toHaveBeenCalled()
       expect(apply).not.toHaveBeenCalled()

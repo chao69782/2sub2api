@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
-import type { AccountImportOverrides, AuthorizationJobStatus, ManagedAccount, RuntimeSettings } from '../shared/types.js'
+import type { AccountImportOverrides, AuthorizationJobStatus, ManagedAccount, RuntimeSettings, TotpRotationStep } from '../shared/types.js'
+import { TOTP_ROTATION_STEPS } from '../shared/totp-rotation.js'
 import type { WorkbenchDatabase } from './db.js'
 import { SecretCipher } from './crypto.js'
 
@@ -21,6 +22,9 @@ interface AccountRow {
   totp_rotated_at: string | null
   totp_rotation_job_status: AuthorizationJobStatus | null
   totp_rotation_error: string | null
+  totp_rotation_step: string | null
+  totp_rotation_import_status: AuthorizationJobStatus | null
+  totp_rotation_import_error: string | null
   selected_proxy_id: number | null
   token_expires_at: string | null
   last_auth_at: string | null
@@ -84,6 +88,9 @@ function mapAccount(row: AccountRow): ManagedAccount {
     totpRotatedAt: row.totp_rotated_at,
     totpRotationStatus: row.totp_rotation_job_status,
     totpRotationError: row.totp_rotation_error,
+    totpRotationStep: TOTP_ROTATION_STEPS.find((step) => step.id === row.totp_rotation_step)?.id ?? null,
+    totpRotationImportStatus: row.totp_rotation_import_status,
+    totpRotationImportError: row.totp_rotation_import_error,
     sub2apiAccountName: row.remote_name || row.desired_remote_name || null,
     selectedProxyId: row.selected_proxy_id,
     tokenExpiresAt: row.token_expires_at,
@@ -118,6 +125,9 @@ SELECT a.*, l.remote_account_id, l.remote_name,
   j.finished_at AS authorization_finished_at
   ,tj.status AS totp_rotation_job_status
   ,tj.error_summary AS totp_rotation_error
+  ,json_extract(tj.payload_json, '$.step') AS totp_rotation_step
+  ,ta.status AS totp_rotation_import_status
+  ,ta.error_summary AS totp_rotation_import_error
   ,(SELECT COUNT(*) FROM jobs attempts WHERE attempts.account_id = a.id AND attempts.type = 'authorize') AS auto_reauthorization_count
   ,COALESCE(l.last_snapshot_json, '{}') AS last_snapshot_json
 FROM managed_accounts a
@@ -132,6 +142,7 @@ LEFT JOIN jobs tj ON tj.id = (
   WHERE latest.account_id = a.id AND latest.type = 'rotate_totp'
   ORDER BY latest.created_at DESC LIMIT 1
 )
+LEFT JOIN jobs ta ON ta.id = json_extract(tj.payload_json, '$.authorizationJobId')
 `
 
 export class AccountRepository {
@@ -485,6 +496,12 @@ export class JobRepository {
   get(jobId: string): WorkbenchJob | null {
     const row = this.db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as JobRow | undefined
     return row ? mapJob(row) : null
+  }
+
+  setTotpRotationStep(jobId: string, step: TotpRotationStep, authorizationJobId?: string): void {
+    const progress = { step, ...(authorizationJobId ? { authorizationJobId } : {}) }
+    this.db.prepare(`UPDATE jobs SET payload_json = json_patch(payload_json, ?), updated_at = ?
+      WHERE id = ? AND type = 'rotate_totp'`).run(JSON.stringify(progress), now(), jobId)
   }
 
   releaseLocks(): void {

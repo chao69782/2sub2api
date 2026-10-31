@@ -75,7 +75,7 @@
             <div class="min-w-0">
               <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
               <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
-              <div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div>
+              <TotpRotationProgress v-if="account.totpRotationStatus" :account="account" :fallback-label="totpRotationLabel(account)" />
             </div>
             <dl class="grid grid-cols-3 gap-2 text-xs">
               <div><dt class="mb-1 text-slate-500">自动重授权次数</dt><dd>{{ account.autoReauthorizationCount }}</dd></div>
@@ -101,7 +101,7 @@
               <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
                 <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
               </button>
-              <button class="icon-button" title="退出所有设备、更换 2FA 并导入 Sub2API" aria-label="退出所有设备、更换 2FA 并导入 Sub2API" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
+              <button class="icon-button" title="退出所有设备、更换 2FA 并导入 Sub2API" aria-label="退出所有设备、更换 2FA 并导入 Sub2API" :disabled="rotationInProgress(account)" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
               <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
@@ -127,7 +127,7 @@
           <tbody class="divide-y divide-slate-100">
             <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50">
               <td class="px-4 py-3"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /></td>
-              <td class="truncate px-4 py-3 font-medium" :title="account.email">{{ account.email }}<div v-if="account.totpRotationStatus" class="mt-1 text-xs" :class="account.totpRotationStatus === 'failed' ? 'text-red-700' : 'text-slate-500'">{{ totpRotationLabel(account) }}</div></td>
+              <td class="px-4 py-3 font-medium"><div class="truncate" :title="account.email">{{ account.email }}</div><TotpRotationProgress v-if="account.totpRotationStatus" :account="account" :fallback-label="totpRotationLabel(account)" /></td>
               <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}</td>
               <td class="px-4 py-3" :title="authorizationResult(account).title">
                 <div class="font-medium" :class="authorizationResult(account).tone">{{ authorizationResult(account).label }}</div>
@@ -160,7 +160,7 @@
                   <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
                     <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
                   </button>
-                  <button class="icon-button" title="退出所有设备、更换 2FA 并导入 Sub2API" aria-label="退出所有设备、更换 2FA 并导入 Sub2API" :disabled="account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running'" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
+                  <button class="icon-button" title="退出所有设备、更换 2FA 并导入 Sub2API" aria-label="退出所有设备、更换 2FA 并导入 Sub2API" :disabled="rotationInProgress(account)" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="编辑" aria-label="编辑" @click="edit(account)"><Pencil :size="16" /></button>
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
@@ -321,6 +321,7 @@ import ModalDialog from '../components/ModalDialog.vue'
 import NullableNumberField from '../components/NullableNumberField.vue'
 import NumberField from '../components/NumberField.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import TotpRotationProgress from '../components/TotpRotationProgress.vue'
 
 const accounts = ref<ManagedAccount[]>([])
 const total = ref(0)
@@ -544,6 +545,10 @@ function totpRotationLabel(account: ManagedAccount): string {
   if (account.totpRotationStatus === 'running') return '2FA 更换：进行中'
   if (account.totpRotationStatus === 'failed') return `2FA 更换失败：${account.totpRotationError || '请重试'}`
   return `2FA 已更换：${formatTime(account.totpRotatedAt)}`
+}
+function rotationInProgress(account: ManagedAccount): boolean {
+  return account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running' ||
+    account.totpRotationStep === 'import_sub2api' && (account.totpRotationImportStatus === 'pending' || account.totpRotationImportStatus === 'running')
 }
 async function startTotpRotation(account: ManagedAccount) {
   try {

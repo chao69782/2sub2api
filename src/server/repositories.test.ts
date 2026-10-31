@@ -23,6 +23,26 @@ afterEach(() => {
 })
 
 describe('AccountRepository', () => {
+  it('persists rotation steps and tracks the linked import rather than a later authorization', () => {
+    const { db } = testDatabase()
+    const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 7)))
+    const jobs = new JobRepository(db)
+    const account = repository.create({ email: 'steps@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    const rotation = jobs.enqueue({ accountId: account.id, type: 'rotate_totp', payload: { step: 'login', source: 'manual' } })
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'pending', totpRotationStep: 'login', totpRotationImportStatus: null })
+    jobs.claimNext('steps-worker')
+    jobs.setTotpRotationStep(rotation.id, 'logout_devices')
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'running', totpRotationStep: 'logout_devices' })
+    const imported = jobs.enqueue({ accountId: account.id, type: 'authorize' })
+    jobs.setTotpRotationStep(rotation.id, 'import_sub2api', imported.id)
+    jobs.complete(rotation.id)
+    expect(jobs.get(rotation.id)?.payload).toMatchObject({ source: 'manual', step: 'import_sub2api', authorizationJobId: imported.id })
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', totpRotationStep: 'import_sub2api', totpRotationImportStatus: 'pending' })
+    jobs.complete(imported.id)
+    jobs.enqueue({ accountId: account.id, type: 'authorize' })
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', totpRotationImportStatus: 'completed', totpRotationImportError: null })
+  })
+
   it('stores passwords and TOTP seeds as AES-GCM ciphertext', () => {
     const { db } = testDatabase()
     const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 7)))
