@@ -484,12 +484,20 @@ export class JobRepository {
     `).get(input.accountId, input.type) as JobRow | undefined
     if (existing) return mapJob(existing)
 
+    let payload = input.payload ?? {}
+    if (input.type === 'rotate_totp') {
+      const previous = this.db.prepare(`SELECT * FROM jobs WHERE account_id = ? AND type = 'rotate_totp'
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(input.accountId) as JobRow | undefined
+      if (previous?.status === 'failed' && mapJob(previous).payload.secretSaved === true) {
+        payload = { ...payload, secretSaved: true }
+      }
+    }
     const timestamp = now()
     const jobId = id()
     this.db.prepare(`
       INSERT INTO jobs(id, account_id, type, status, payload_json, max_attempts, run_after, created_at, updated_at)
       VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-    `).run(jobId, input.accountId, input.type, JSON.stringify(input.payload ?? {}), input.maxAttempts ?? 3, input.runAfter ?? timestamp, timestamp, timestamp)
+    `).run(jobId, input.accountId, input.type, JSON.stringify(payload), input.maxAttempts ?? 3, input.runAfter ?? timestamp, timestamp, timestamp)
     return this.get(jobId)!
   }
 
@@ -502,6 +510,11 @@ export class JobRepository {
     const progress = { step, ...(authorizationJobId ? { authorizationJobId } : {}) }
     this.db.prepare(`UPDATE jobs SET payload_json = json_patch(payload_json, ?), updated_at = ?
       WHERE id = ? AND type = 'rotate_totp'`).run(JSON.stringify(progress), now(), jobId)
+  }
+
+  markTotpRotationSecretSaved(jobId: string): void {
+    this.db.prepare(`UPDATE jobs SET payload_json = json_patch(payload_json, '{"secretSaved":true}'), updated_at = ?
+      WHERE id = ? AND type = 'rotate_totp'`).run(now(), jobId)
   }
 
   releaseLocks(): void {

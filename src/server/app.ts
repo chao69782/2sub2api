@@ -624,12 +624,17 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
           email: account.email,
           ...secrets,
           pendingTotpSecret: accounts.getPendingTotpSecret(account.id),
+          secretSaved: job.payload.secretSaved === true,
           stageSecret: (secret) => accounts.stageTotpSecret(account.id, secret),
+          saveSecret: () => db.transaction(() => {
+            accounts.promoteStagedTotpSecret(account.id)
+            jobs.markTotpRotationSecretSaved(job.id)
+            return accounts.getSecrets(account.id).totpSecret
+          })(),
           onStep: (step) => jobs.setTotpRotationStep(job.id, step)
         })
-        jobs.setTotpRotationStep(job.id, 'save_secret')
         const authorizationJob = db.transaction(() => {
-          const updated = accounts.promoteStagedTotpSecret(account.id)
+          const updated = accounts.get(account.id)!
           const queued = jobs.enqueue({
             accountId: account.id, type: 'authorize',
             payload: { accountName: updated.sub2apiAccountName || updated.email, automatic: false },

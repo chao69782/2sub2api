@@ -2,10 +2,10 @@ import type { ManagedAccount, TotpRotationStep } from './types.js'
 
 export const TOTP_ROTATION_STEPS: ReadonlyArray<{ id: TotpRotationStep; label: string }> = [
   { id: 'login', label: '登录账号' },
-  { id: 'logout_devices', label: '退出所有设备' },
-  { id: 'relogin', label: '重新登录' },
   { id: 'rotate_totp', label: '更换并确认 2FA' },
   { id: 'save_secret', label: '保存新密钥' },
+  { id: 'logout_devices', label: '退出所有设备' },
+  { id: 'relogin', label: '重新登录' },
   { id: 'import_sub2api', label: '授权并导入 Sub2API' }
 ]
 

@@ -135,13 +135,14 @@ describe('2FA rotation with device logout', () => {
   const oldSecret = 'JBSWY3DPEHPK3PXP'
   const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
 
-  function freshSession(events: string[]) {
+  function rotationSession(events: string[], logoutStatus = 200) {
     const responses = [
       { status: 200, json: { factors: { totp: [{ id: 'old-factor' }] } } },
       { status: 200, json: {} },
       { status: 200, json: { session_id: 'new-session', secret: newSecret } },
       { status: 200, json: {} },
-      { status: 200, json: { mfa_enabled_v2: true, factors: { totp: [{ id: 'new-factor' }] } } }
+      { status: 200, json: { mfa_enabled_v2: true, factors: { totp: [{ id: 'new-factor' }] } } },
+      { status: logoutStatus, json: {} }
     ]
     return {
       mfaVerified: true,
@@ -149,76 +150,114 @@ describe('2FA rotation with device logout', () => {
     }
   }
 
-  it('logs in, logs out all devices, logs in again, then rotates using only the fresh session', async () => {
+  it('rotates and saves the new secret before logout, then logs in with the saved secret', async () => {
     const events: string[] = []
-    const stale = { mfaVerified: true, api: vi.fn(async () => { events.push('logout-all'); return { status: 200, json: {} } }) }
-    const fresh = freshSession(events)
-    const login = vi.fn(async (_secret: string) => { events.push('login'); return events.length === 1 ? stale : fresh })
+    const session = rotationSession(events)
+    const fresh = { mfaVerified: true, api: vi.fn() }
+    const login = vi.fn(async (_secret: string) => { events.push('login'); return events.length === 1 ? session : fresh })
     const progress: TotpRotationStep[] = []
-    await rotateTotpWithSessionReset({ totpSecret: oldSecret, onStep: (step) => progress.push(step), stageSecret: (secret) => { expect(secret).toBe(newSecret); events.push('stage') } }, login)
-    expect(progress).toEqual(['login', 'logout_devices', 'relogin', 'rotate_totp'])
-    expect(login.mock.calls.map(([secret]) => secret)).toEqual([oldSecret, oldSecret])
-    expect(stale.api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    await rotateTotpWithSessionReset({
+      totpSecret: oldSecret, onStep: (step) => progress.push(step),
+      stageSecret: (secret) => { expect(secret).toBe(newSecret); events.push('stage') },
+      saveSecret: () => { events.push('save'); return newSecret }
+    }, login)
+    expect(progress).toEqual(['login', 'rotate_totp', 'save_secret', 'logout_devices', 'relogin'])
+    expect(login.mock.calls.map(([secret]) => secret)).toEqual([oldSecret, newSecret])
+    expect(session.api).toHaveBeenLastCalledWith('/accounts/logout_all', undefined, 'POST')
+    expect(fresh.api).not.toHaveBeenCalled()
     expect(events).toEqual([
-      'login', 'logout-all', 'login', '/accounts/mfa_info', '/accounts/mfa/user/disable_in_house',
-      '/accounts/mfa/enroll', 'stage', '/accounts/mfa/user/activate_enrollment', '/accounts/mfa_info'
+      'login', '/accounts/mfa_info', '/accounts/mfa/user/disable_in_house', '/accounts/mfa/enroll',
+      'stage', '/accounts/mfa/user/activate_enrollment', '/accounts/mfa_info', 'save', '/accounts/logout_all', 'login'
     ])
   })
 
-  it.each([302, 401, 403, 500])('stops before re-login or 2FA changes when logout returns HTTP %s', async (status) => {
-    const api = vi.fn(async () => ({ status, json: {} }))
-    const login = vi.fn(async () => ({ mfaVerified: true, api }))
+  it.each([302, 401, 403, 500])('keeps the saved secret and stops before re-login when logout returns HTTP %s', async (status) => {
+    const session = rotationSession([], status)
+    const login = vi.fn(async () => session)
     const stageSecret = vi.fn()
+    const saveSecret = vi.fn(() => newSecret)
     const progress: TotpRotationStep[] = []
-    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret, onStep: (step) => progress.push(step) }, login))
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret, saveSecret, onStep: (step) => progress.push(step) }, login))
       .rejects.toMatchObject({ code: 'CHATGPT_LOGOUT_ALL_FAILED' })
-    expect(progress).toEqual(['login', 'logout_devices'])
+    expect(progress).toEqual(['login', 'rotate_totp', 'save_secret', 'logout_devices'])
     expect(login).toHaveBeenCalledTimes(1)
-    expect(api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
-    expect(stageSecret).not.toHaveBeenCalled()
+    expect(session.api).toHaveBeenLastCalledWith('/accounts/logout_all', undefined, 'POST')
+    expect(stageSecret).toHaveBeenCalledExactlyOnceWith(newSecret)
+    expect(saveSecret).toHaveBeenCalledTimes(1)
   })
 
-  it('does not continue when the fresh login fails after logout', async () => {
-    const api = vi.fn(async () => ({ status: 204, json: {} }))
-    const login = vi.fn().mockResolvedValueOnce({ mfaVerified: true, api })
+  it('reports that the new secret was saved when the fresh login fails', async () => {
+    const login = vi.fn().mockResolvedValueOnce(rotationSession([], 204))
       .mockRejectedValueOnce(new ManualActionRequiredError('需要邮箱验证', 'EMAIL_VERIFICATION_REQUIRED'))
     const stageSecret = vi.fn()
-    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret }, login))
-      .rejects.toMatchObject({ code: 'EMAIL_VERIFICATION_REQUIRED', message: expect.stringContaining('重新登录失败') })
-    expect(login).toHaveBeenCalledTimes(2)
-    expect(api).toHaveBeenCalledTimes(1)
-    expect(stageSecret).not.toHaveBeenCalled()
+    const saveSecret = vi.fn(() => newSecret)
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret, saveSecret }, login))
+      .rejects.toMatchObject({ code: 'EMAIL_VERIFICATION_REQUIRED', message: expect.stringContaining('新 2FA 已保存') })
+    expect(login.mock.calls).toEqual([[oldSecret], [newSecret]])
+    expect(saveSecret).toHaveBeenCalledTimes(1)
   })
 
-  it('logs out and re-verifies an already activated pending secret without rotating it again', async () => {
+  it('saves an already activated pending secret before logout without rotating it again', async () => {
     const staleApi = vi.fn(async () => ({ status: 200, json: {} }))
     const freshApi = vi.fn()
     const login = vi.fn().mockResolvedValueOnce({ mfaVerified: true, api: staleApi }).mockResolvedValueOnce({ mfaVerified: true, api: freshApi })
     const stageSecret = vi.fn()
-    await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret }, login)
+    const saveSecret = vi.fn(() => newSecret)
+    await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret, saveSecret }, login)
     expect(login.mock.calls).toEqual([[newSecret], [newSecret]])
     expect(staleApi).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
     expect(freshApi).not.toHaveBeenCalled()
     expect(stageSecret).not.toHaveBeenCalled()
+    expect(saveSecret).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back from an inactive pending secret and reuses the successful old secret for fresh login', async () => {
-    const staleApi = vi.fn(async () => ({ status: 200, json: {} }))
+  it('falls back from an inactive pending secret, rotates, and uses the newly saved secret for fresh login', async () => {
     const login = vi.fn().mockRejectedValueOnce(new ManualActionRequiredError('2FA 验证失败', 'MFA_VERIFICATION_FAILED'))
-      .mockResolvedValueOnce({ mfaVerified: true, api: staleApi }).mockResolvedValueOnce(freshSession([]))
+      .mockResolvedValueOnce(rotationSession([])).mockResolvedValueOnce({ mfaVerified: true, api: vi.fn() })
     const stageSecret = vi.fn()
-    await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret }, login)
-    expect(login.mock.calls).toEqual([[newSecret], [oldSecret], [oldSecret]])
+    await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret, saveSecret: () => newSecret }, login)
+    expect(login.mock.calls).toEqual([[newSecret], [oldSecret], [newSecret]])
     expect(stageSecret).toHaveBeenCalledExactlyOnceWith(newSecret)
   })
 
   it('does not retry with another secret on a login security failure', async () => {
     const login = vi.fn().mockRejectedValue(new ManualActionRequiredError('安全验证', 'OPENAI_SECURITY_CHALLENGE'))
     const stageSecret = vi.fn()
-    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret }, login))
+    const saveSecret = vi.fn(() => newSecret)
+    await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret, saveSecret }, login))
       .rejects.toMatchObject({ code: 'OPENAI_SECURITY_CHALLENGE' })
     expect(login).toHaveBeenCalledTimes(1)
     expect(stageSecret).not.toHaveBeenCalled()
+    expect(saveSecret).not.toHaveBeenCalled()
+  })
+
+  it('resumes after a saved-secret checkpoint without enrolling or saving another secret', async () => {
+    const api = vi.fn(async () => ({ status: 200, json: {} }))
+    const login = vi.fn(async () => ({ mfaVerified: true, api }))
+    const stageSecret = vi.fn()
+    const saveSecret = vi.fn(() => newSecret)
+    await rotateTotpWithSessionReset({ totpSecret: newSecret, secretSaved: true, stageSecret, saveSecret }, login)
+    expect(login.mock.calls).toEqual([[newSecret], [newSecret]])
+    expect(api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    expect(stageSecret).not.toHaveBeenCalled()
+    expect(saveSecret).not.toHaveBeenCalled()
+  })
+
+  it('does not log out when confirming or saving the new secret fails', async () => {
+    for (const failure of ['confirm', 'save']) {
+      const session = rotationSession([])
+      const originalApi = session.api.getMockImplementation()!
+      session.api.mockImplementation(async (path: string) => {
+        if (failure === 'confirm' && path.endsWith('activate_enrollment')) return { status: 400, json: {} }
+        return originalApi(path)
+      })
+      const login = vi.fn(async () => session)
+      const saveSecret = vi.fn(() => { throw new Error('密钥保存失败') })
+      await expect(rotateTotpWithSessionReset({ totpSecret: oldSecret, stageSecret: vi.fn(), saveSecret }, login)).rejects.toThrow()
+      expect(session.api.mock.calls.some(([path]) => path === '/accounts/logout_all')).toBe(false)
+      expect(saveSecret).toHaveBeenCalledTimes(failure === 'save' ? 1 : 0)
+      expect(login).toHaveBeenCalledTimes(1)
+    }
   })
 })
 

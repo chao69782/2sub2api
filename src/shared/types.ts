@@ -20,7 +20,7 @@ export type HealthStatus =
 export type SyncStatus = 'not_synced' | 'syncing' | 'synced' | 'sync_failed' | 'remote_missing'
 export type ProxyPolicy = 'auto' | 'direct' | 'fixed'
 export type AuthorizationJobStatus = 'pending' | 'running' | 'completed' | 'failed'
-export type TotpRotationStep = 'login' | 'logout_devices' | 'relogin' | 'rotate_totp' | 'save_secret' | 'import_sub2api'
+export type TotpRotationStep = 'login' | 'rotate_totp' | 'save_secret' | 'logout_devices' | 'relogin' | 'import_sub2api'
 
 export interface ImportDefaults {
   modelWhitelist: string[]

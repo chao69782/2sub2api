@@ -709,7 +709,9 @@ export async function rotateTotpInAuthenticatedSession(
 interface TotpRotationState {
   totpSecret: string
   pendingTotpSecret?: string | null
+  secretSaved?: boolean
   stageSecret: (secret: string) => void
+  saveSecret: () => string
   onStep?: (step: TotpRotationStep) => void
 }
 
@@ -736,24 +738,26 @@ export async function rotateTotpWithSessionReset(
     }
   }
   session ??= await login(loginSecret)
+  if (!input.secretSaved) {
+    input.onStep?.('rotate_totp')
+    if (!recoveringActivatedSecret) await rotateTotpInAuthenticatedSession(session.api, input.stageSecret)
+    input.onStep?.('save_secret')
+    loginSecret = input.saveSecret()
+  }
   input.onStep?.('logout_devices')
   // Matches ChatGPT's Security > Active sessions action, including the current session.
   const loggedOut = await session.api('/accounts/logout_all', undefined, 'POST')
   if (loggedOut.status < 200 || loggedOut.status >= 300) {
-    throw new ManualActionRequiredError(`退出所有登录设备失败（HTTP ${loggedOut.status}），未继续更换 2FA`, 'CHATGPT_LOGOUT_ALL_FAILED')
+    throw new ManualActionRequiredError(`新 2FA 已保存，但退出所有登录设备失败（HTTP ${loggedOut.status}），未继续授权导入`, 'CHATGPT_LOGOUT_ALL_FAILED')
   }
-  let freshSession: TotpRotationSession
   input.onStep?.('relogin')
   try {
-    freshSession = await login(loginSecret)
+    await login(loginSecret)
   } catch (error) {
-    const message = `已提交退出所有设备，但重新登录失败，未继续更换 2FA：${error instanceof Error ? error.message : '未知错误'}`
+    const message = `新 2FA 已保存并已提交退出所有设备，但重新登录失败，未继续授权导入：${error instanceof Error ? error.message : '未知错误'}`
     if (error instanceof ManualActionRequiredError) throw new ManualActionRequiredError(message, error.code)
     throw new Error(message)
   }
-  input.onStep?.('rotate_totp')
-  if (recoveringActivatedSecret && freshSession.mfaVerified) return
-  await rotateTotpInAuthenticatedSession(freshSession.api, input.stageSecret)
 }
 
 export async function rotateTotpWithSentinel(input: Omit<ProtocolAuthInput, 'authUrl'> & TotpRotationState): Promise<void> {

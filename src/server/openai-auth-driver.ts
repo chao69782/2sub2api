@@ -38,7 +38,9 @@ export class OpenAIAuthDriver {
     password: string
     totpSecret: string
     pendingTotpSecret: string | null
+    secretSaved?: boolean
     stageSecret: (secret: string) => void
+    saveSecret: () => string
     onStep?: (step: TotpRotationStep) => void
   }): Promise<void> {
     if (this.busy) throw new Error('AUTH_BROWSER_BUSY')

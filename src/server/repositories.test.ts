@@ -23,6 +23,24 @@ afterEach(() => {
 })
 
 describe('AccountRepository', () => {
+  it('keeps the saved-secret checkpoint for retries and starts a new rotation after completion', () => {
+    const { db } = testDatabase()
+    const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 7)))
+    const jobs = new JobRepository(db)
+    const account = repository.create({ email: 'resume@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
+    const first = jobs.enqueue({ accountId: account.id, type: 'rotate_totp', payload: { step: 'login' } })
+    jobs.markTotpRotationSecretSaved(first.id)
+    jobs.setTotpRotationStep(first.id, 'logout_devices')
+    jobs.fail(first, 'NETWORK_ERROR', '请求超时', new Date(Date.now() + 1000).toISOString())
+    expect(jobs.get(first.id)).toMatchObject({ status: 'pending', payload: { secretSaved: true, step: 'logout_devices' } })
+    jobs.fail(first, 'LOGOUT_FAILED', '退出失败')
+    const resumed = jobs.enqueue({ accountId: account.id, type: 'rotate_totp', payload: { step: 'login' } })
+    expect(resumed.id).not.toBe(first.id)
+    expect(resumed.payload).toMatchObject({ secretSaved: true, step: 'login' })
+    jobs.complete(resumed.id)
+    expect(jobs.enqueue({ accountId: account.id, type: 'rotate_totp', payload: { step: 'login' } }).payload).toEqual({ step: 'login' })
+  })
+
   it('persists rotation steps and tracks the linked import rather than a later authorization', () => {
     const { db } = testDatabase()
     const repository = new AccountRepository(db, new SecretCipher(Buffer.alloc(32, 7)))

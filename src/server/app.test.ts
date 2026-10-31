@@ -410,13 +410,21 @@ describe('account operations', () => {
     if (linked) repository.setSchedulingPaused(account.id, true)
     const rotated = vi.spyOn(OpenAIAuthDriver.prototype, 'rotateTotp').mockImplementation(async (input) => {
       events.push('rotate')
-      for (const step of ['login', 'logout_devices', 'relogin', 'rotate_totp'] as const) {
+      for (const step of ['login', 'rotate_totp'] as const) {
         input.onStep?.(step)
         expect(repository.get(account.id)?.totpRotationStep).toBe(step)
       }
       input.stageSecret(newSecret)
       expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXP')
       events.push('confirmed')
+      input.onStep?.('save_secret')
+      expect(input.saveSecret()).toBe(newSecret)
+      expect(repository.getPendingTotpSecret(account.id)).toBeNull()
+      for (const step of ['logout_devices', 'relogin'] as const) {
+        input.onStep?.(step)
+        expect(repository.get(account.id)?.totpRotationStep).toBe(step)
+        expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
+      }
     })
     vi.spyOn(Sub2APIClient.prototype, 'listOpenAIAccounts').mockResolvedValue({ items: [remote], total: 1 })
     vi.spyOn(Sub2APIClient.prototype, 'listProxies').mockResolvedValue([])
@@ -477,6 +485,43 @@ describe('account operations', () => {
     expect(repository.getSecrets(account.id).totpSecret).toBe('JBSWY3DPEHPK3PXP')
     expect(db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE account_id = ? AND type = 'authorize'").get(account.id)).toEqual({ count: 0 })
     expect(authorize).not.toHaveBeenCalled()
+  })
+
+  it.each(['logout_devices', 'relogin'] as const)('retains the saved secret after %s fails and resumes without rotating again', async (failedStep) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    const { app, db, headers, repository, account, remote } = await setup()
+    const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
+    vi.spyOn(Sub2APIClient.prototype, 'listOpenAIAccounts').mockResolvedValue({ items: [remote], total: 1 })
+    const rotated = vi.spyOn(OpenAIAuthDriver.prototype, 'rotateTotp').mockImplementationOnce(async (input) => {
+      expect(input.secretSaved).toBe(false)
+      input.stageSecret(newSecret)
+      input.onStep?.('save_secret')
+      expect(input.saveSecret()).toBe(newSecret)
+      input.onStep?.(failedStep)
+      throw new ManualActionRequiredError('新 2FA 已保存，后续步骤失败', 'SESSION_RESET_FAILED')
+    }).mockImplementationOnce(async (input) => {
+      expect(input.secretSaved).toBe(true)
+      expect(input.totpSecret).toBe(newSecret)
+      expect(input.pendingTotpSecret).toBeNull()
+      input.onStep?.('login')
+      input.onStep?.('logout_devices')
+      input.onStep?.('relogin')
+    })
+    const queued = await app.inject({ method: 'POST', url: `/api/accounts/${account.id}/totp/rotate`, headers })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'failed', totpRotationStep: failedStep })
+    expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
+    expect(repository.getPendingTotpSecret(account.id)).toBeNull()
+    const failedJob = db.prepare('SELECT payload_json FROM jobs WHERE id = ?').get(queued.json().job.id) as { payload_json: string }
+    expect(JSON.parse(failedJob.payload_json)).toMatchObject({ secretSaved: true, step: failedStep })
+    expect(failedJob.payload_json).not.toContain(newSecret)
+    expect(db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE account_id = ? AND type = 'authorize'").get(account.id)).toEqual({ count: 0 })
+    const retry = await app.inject({ method: 'POST', url: `/api/accounts/${account.id}/totp/rotate`, headers })
+    expect(retry.json().job.payload.secretSaved).toBe(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(rotated).toHaveBeenCalledTimes(2)
+    expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', totpRotationStep: 'import_sub2api', totpRotationImportStatus: 'pending' })
+    expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
   })
 
   it.each([true, false])('preserves manual pause=%s after reauthorization', async (paused) => {
