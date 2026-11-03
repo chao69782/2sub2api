@@ -50,6 +50,10 @@ const accountImportOverridesSchema = z.object({
   modelMapping: importProfileShape.modelMapping.default({}),
   modelMappingConfigured: z.boolean().optional()
 }).superRefine(validateImportProfile)
+const accountAuthorizationConfigSchema = z.object({
+  accountName: z.string().trim().min(1).max(200),
+  importOverrides: accountImportOverridesSchema.nullable().optional()
+})
 const importDefaultsSchema = z.object(importProfileShape).superRefine(validateImportProfile)
 const runtimeSettingsSchema = z.object({
   scheduler: schedulerSchema,
@@ -484,10 +488,22 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
 
   app.post('/api/accounts/:id/totp/rotate', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
+    const parsed = accountAuthorizationConfigSchema.partial({ accountName: true }).safeParse(request.body ?? {})
+    if (!parsed.success) return reply.code(400).send({ code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? '参数错误' })
+    const body = parsed.data
     if (!accounts.get(params.id)) return reply.code(404).send({ code: 'ACCOUNT_NOT_FOUND', message: '账号不存在' })
     accounts.getSecrets(params.id)
-    const job = jobs.enqueue({ accountId: params.id, type: 'rotate_totp', payload: { step: 'login' }, maxAttempts: 2 })
-    audit(request, 'account.totp.rotate.queued', 'success', params.id, { jobId: job.id })
+    if (body.importOverrides) await validateImportTarget(body.importOverrides)
+    const job = db.transaction(() => {
+      if (body.importOverrides !== undefined) accounts.update(params.id, { importOverrides: body.importOverrides })
+      if (body.accountName !== undefined) accounts.setDesiredRemoteName(params.id, body.accountName)
+      return jobs.enqueue({
+        accountId: params.id, type: 'rotate_totp',
+        payload: { step: 'login', ...(body.accountName !== undefined ? { accountName: body.accountName } : {}) },
+        maxAttempts: 2
+      })
+    })()
+    audit(request, 'account.totp.rotate.queued', 'success', params.id, { jobId: job.id, accountImportOverrides: Boolean(body.importOverrides) })
     return reply.code(202).send({ job })
   })
 
@@ -558,10 +574,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
 
   app.post('/api/accounts/:id/authorize/auto', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params)
-    const parsed = z.object({
-      accountName: z.string().trim().min(1).max(200),
-      importOverrides: accountImportOverridesSchema.nullable().optional()
-    }).safeParse(request.body)
+    const parsed = accountAuthorizationConfigSchema.safeParse(request.body)
     if (!parsed.success) return reply.code(400).send({ code: 'VALIDATION_ERROR', message: parsed.error.issues[0]?.message ?? '参数错误' })
     const body = parsed.data
     const account = accounts.get(params.id)
@@ -637,7 +650,7 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
           const updated = accounts.get(account.id)!
           const queued = jobs.enqueue({
             accountId: account.id, type: 'authorize',
-            payload: { accountName: updated.sub2apiAccountName || updated.email, automatic: false },
+            payload: { accountName: typeof job.payload.accountName === 'string' ? job.payload.accountName : updated.sub2apiAccountName || updated.email, automatic: false },
             maxAttempts: 2
           })
           accounts.setOAuthPending(account.id, updated.selectedProxyId)

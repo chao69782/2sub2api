@@ -101,7 +101,7 @@
               <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
                 <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
               </button>
-              <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
+              <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="16" /></button>
               <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
               <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
             </div>
@@ -159,7 +159,7 @@
                   <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
                     <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
                   </button>
-                  <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="startTotpRotation(account)"><KeyRound :size="16" /></button>
+                  <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="16" /></button>
                   <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
                   <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
                 </div>
@@ -216,8 +216,9 @@
       </div>
     </ModalDialog>
 
-    <ModalDialog v-model:open="authOpen" title="自动授权" width="max-w-4xl">
+    <ModalDialog v-model:open="authOpen" :title="authMode === 'rotate_totp' ? '更换 2FA 并导入 Sub2API' : '自动授权'" width="max-w-4xl">
       <form class="space-y-5" @submit.prevent="queueAuthorization">
+        <p v-if="authMode === 'rotate_totp'" class="text-sm leading-6 text-slate-600">确认后将更换并保存新 2FA，退出所有设备，再重新登录并按此配置导入 Sub2API。</p>
         <div><label class="label" for="sub2apiAccountName">Sub2API 账号名称</label><input id="sub2apiAccountName" v-model="authSub2apiName" class="input" maxlength="200" required /></div>
 
         <fieldset class="rounded-md border border-slate-200 p-4">
@@ -294,7 +295,7 @@
         </div>
 
         <div v-if="authError" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ authError }}</div>
-        <div class="flex justify-end gap-2"><button type="button" class="button" @click="authOpen = false">取消</button><button class="button button-primary" :disabled="!authSub2apiName.trim() || authorizing"><LoaderCircle v-if="authorizing" :size="17" class="animate-spin" /><Bot v-else :size="17" />开始自动授权</button></div>
+        <div class="flex justify-end gap-2"><button type="button" class="button" @click="authOpen = false">取消</button><button class="button button-primary" :disabled="!authSub2apiName.trim() || authorizing"><LoaderCircle v-if="authorizing" :size="17" class="animate-spin" /><KeyRound v-else-if="authMode === 'rotate_totp'" :size="17" /><Bot v-else :size="17" />{{ authMode === 'rotate_totp' ? '开始更换 2FA' : '开始自动授权' }}</button></div>
       </form>
     </ModalDialog>
   </section>
@@ -373,6 +374,7 @@ watch(credentialsOpen, (open) => {
   if (!open) credentials.value = null
 })
 const authOpen = ref(false)
+const authMode = ref<'authorize' | 'rotate_totp'>('authorize')
 const authAccountId = ref('')
 const authSub2apiName = ref('')
 const authError = ref('')
@@ -534,13 +536,6 @@ function rotationInProgress(account: ManagedAccount): boolean {
   return account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running' ||
     account.totpRotationStep === 'import_sub2api' && (account.totpRotationImportStatus === 'pending' || account.totpRotationImportStatus === 'running')
 }
-async function startTotpRotation(account: ManagedAccount) {
-  try {
-    await api.rotateTotp(account.id)
-    setResult(`${account.email} 的 2FA 更换任务已开始，保存新密钥后退出所有设备、重新登录并导入 Sub2API`)
-    await load()
-  } catch (e) { setResult(e instanceof Error ? e.message : '启动 2FA 更换失败', true) }
-}
 async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); selectedIds.value = selectedIds.value.filter((id) => id !== account.id); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
 function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
   return {
@@ -552,7 +547,7 @@ function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides
 function cloneOverrides(overrides: AccountImportOverrides): AccountImportOverrides {
   return { ...overrides, modelMapping: { ...overrides.modelMapping }, modelWhitelist: [...overrides.modelWhitelist], groupIds: [...overrides.groupIds] }
 }
-async function openAuthorization(account: ManagedAccount) {
+async function openAuthorization(account: ManagedAccount, mode: 'authorize' | 'rotate_totp' = 'authorize') {
   try {
     // The page preload and all dialog opens share one cached metadata request.
     await loadAuthorizationMetadata()
@@ -564,6 +559,7 @@ async function openAuthorization(account: ManagedAccount) {
       selected.modelMapping = { ...defaults.modelMapping }
     }
     authAccountId.value = account.id
+    authMode.value = mode
     authSub2apiName.value = account.sub2apiAccountName || account.email
     authUseGlobal.value = false
     authOverrides.value = selected
@@ -603,15 +599,19 @@ function buildAuthorizationOverrides(): AccountImportOverrides | null {
   }
 }
 async function queueAuthorization() {
+  const rotating = authMode.value === 'rotate_totp'
   authorizing.value = true
   authError.value = ''
   try {
     const importOverrides = buildAuthorizationOverrides()
-    await api.autoAuthorize(authAccountId.value, authSub2apiName.value.trim(), importOverrides)
+    if (rotating) await api.rotateTotp(authAccountId.value, authSub2apiName.value.trim(), importOverrides)
+    else await api.autoAuthorize(authAccountId.value, authSub2apiName.value.trim(), importOverrides)
     authOpen.value = false
-    setResult(importOverrides ? '自动授权任务已开始，已保存账号专属配置' : '自动授权任务已开始，使用全局配置')
+    setResult(rotating
+      ? `2FA 更换任务已开始，${importOverrides ? '已保存账号专属配置' : '使用全局配置'}，完成后自动导入 Sub2API`
+      : importOverrides ? '自动授权任务已开始，已保存账号专属配置' : '自动授权任务已开始，使用全局配置')
     await load()
-  } catch (e) { authError.value = e instanceof Error ? e.message : '自动授权启动失败' } finally { authorizing.value = false }
+  } catch (e) { authError.value = e instanceof Error ? e.message : rotating ? '启动 2FA 更换失败' : '自动授权启动失败' } finally { authorizing.value = false }
 }
 onMounted(() => {
   void load()

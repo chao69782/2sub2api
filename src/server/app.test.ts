@@ -398,14 +398,21 @@ describe('account operations', () => {
   })
 
   it.each([
-    { linked: true, importFails: false },
-    { linked: false, importFails: false },
-    { linked: false, importFails: true }
-  ])('imports only after persisting the confirmed new 2FA: %j', async ({ linked, importFails }) => {
+    { linked: true, importFails: false, profile: 'custom' },
+    { linked: false, importFails: false, profile: 'custom' },
+    { linked: false, importFails: true, profile: 'existing' },
+    { linked: true, importFails: false, profile: 'global' }
+  ])('imports with the selected configuration only after persisting the confirmed new 2FA: %j', async ({ linked, importFails, profile }) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
     const { app, db, headers, repository, account: existing, remote, setSchedulable } = await setup()
     const account = linked ? existing : repository.create({ email: 'new-rotation@example.com', password: 'password', totpSecret: 'JBSWY3DPEHPK3PXP' })
     const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
+    const overrides: AccountImportOverrides = {
+      modelWhitelist: ['gpt-5.6-luna'], modelMapping: { alias: 'gpt-5.6-sol' }, modelMappingConfigured: true,
+      concurrency: 8, priority: 77, loadFactor: 2, groupIds: [12], autoPauseOnExpired: false, proxyPolicy: 'fixed', fixedProxyId: 9
+    }
+    const accountName = profile === 'existing' ? account.email : '更换 2FA 后的新名称'
+    if (profile === 'global') repository.update(account.id, { importOverrides: overrides })
     const events: string[] = []
     if (linked) repository.setSchedulingPaused(account.id, true)
     const rotated = vi.spyOn(OpenAIAuthDriver.prototype, 'rotateTotp').mockImplementation(async (input) => {
@@ -427,7 +434,8 @@ describe('account operations', () => {
       }
     })
     vi.spyOn(Sub2APIClient.prototype, 'listOpenAIAccounts').mockResolvedValue({ items: [remote], total: 1 })
-    vi.spyOn(Sub2APIClient.prototype, 'listProxies').mockResolvedValue([])
+    vi.spyOn(Sub2APIClient.prototype, 'listGroups').mockResolvedValue([{ id: 12, name: 'OpenAI 分组', platform: 'openai' }])
+    vi.spyOn(Sub2APIClient.prototype, 'listProxies').mockResolvedValue(profile === 'custom' ? [{ id: 9, name: '固定代理', status: 'active' }] : [])
     vi.spyOn(Sub2APIClient.prototype, 'generateOpenAIAuthUrl').mockImplementation(async () => {
       expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
       expect(repository.getPendingTotpSecret(account.id)).toBeNull()
@@ -440,7 +448,7 @@ describe('account operations', () => {
       if (importFails) throw new ManualActionRequiredError('需要人工完成邮箱验证', 'EMAIL_VERIFICATION_REQUIRED')
       return 'http://localhost:1455/auth/callback?code=test-code&state=after-rotation'
     })
-    const imported = { ...remote, id: linked ? remote.id : 202 }
+    const imported = { ...remote, id: linked ? remote.id : 202, name: accountName }
     const create = vi.spyOn(Sub2APIClient.prototype, 'createFromOAuth').mockResolvedValue(imported)
     const apply = vi.spyOn(Sub2APIClient.prototype, 'applyOAuthCredentials').mockResolvedValue(imported)
     vi.spyOn(Sub2APIClient.prototype, 'exchangeCode').mockResolvedValue({ access_token: 'test-token' })
@@ -448,15 +456,19 @@ describe('account operations', () => {
     vi.spyOn(Sub2APIClient.prototype, 'clearAccountError').mockResolvedValue(imported)
     setSchedulable.mockImplementation(async (_id, schedulable) => ({ ...imported, schedulable }))
     vi.spyOn(Sub2APIClient.prototype, 'queryAccountUsage').mockResolvedValue({ five_hour: { utilization: 20, remaining_seconds: 9000 } })
-    const queued = await app.inject({ method: 'POST', url: `/api/accounts/${account.id}/totp/rotate`, headers })
+    const queued = await app.inject({
+      method: 'POST', url: `/api/accounts/${account.id}/totp/rotate`, headers,
+      ...(profile === 'existing' ? {} : { payload: { accountName: ` ${accountName} `, importOverrides: profile === 'custom' ? overrides : null } })
+    })
     expect(queued.statusCode).toBe(202)
+    expect(repository.get(account.id)?.importOverrides).toEqual(profile === 'custom' ? overrides : null)
     await vi.advanceTimersByTimeAsync(2000)
     expect(rotated).toHaveBeenCalledTimes(1)
     expect(events).toEqual(['rotate', 'confirmed'])
     expect(authorize).not.toHaveBeenCalled()
     expect(repository.get(account.id)).toMatchObject({ totpRotationStatus: 'completed', totpRotationStep: 'import_sub2api', totpRotationImportStatus: 'pending', lastAuthorizationStatus: 'pending' })
     const authJob = db.prepare("SELECT payload_json FROM jobs WHERE account_id = ? AND type = 'authorize'").get(account.id) as { payload_json: string }
-    expect(JSON.parse(authJob.payload_json)).toMatchObject({ accountName: linked ? remote.name : account.email, automatic: false })
+    expect(JSON.parse(authJob.payload_json)).toMatchObject({ accountName, automatic: false })
     await vi.advanceTimersByTimeAsync(2000)
     expect(events).toEqual(['rotate', 'confirmed', 'oauth-start', 'authorize-with-new-2fa'])
     expect(repository.getSecrets(account.id).totpSecret).toBe(newSecret)
@@ -466,11 +478,45 @@ describe('account operations', () => {
       expect(apply).not.toHaveBeenCalled()
     } else {
       expect(repository.get(account.id)?.sub2apiAccountId).toBe(imported.id)
-      expect(update).toHaveBeenCalledWith(imported.id, expect.objectContaining({ name: linked ? remote.name : account.email }))
+      expect(update).toHaveBeenCalledWith(imported.id, expect.objectContaining({
+        name: accountName,
+        concurrency: profile === 'custom' ? 8 : 3,
+        priority: profile === 'custom' ? 77 : 50,
+        group_ids: profile === 'custom' ? [12] : [],
+        load_factor: profile === 'custom' ? 2 : null,
+        auto_pause_on_expired: profile !== 'custom',
+        credentials: expect.objectContaining({ model_mapping: profile === 'custom' ? { 'gpt-5.6-luna': 'gpt-5.6-luna', alias: 'gpt-5.6-sol' } : {} }),
+        ...(profile === 'custom' ? { proxy_id: 9 } : {})
+      }))
+      expect(repository.get(account.id)?.selectedProxyId).toBe(profile === 'custom' ? 9 : null)
       expect(setSchedulable).toHaveBeenLastCalledWith(imported.id, !linked)
       expect(create).toHaveBeenCalledTimes(linked ? 0 : 1)
       expect(apply).toHaveBeenCalledTimes(linked ? 1 : 0)
     }
+  })
+
+  it('rejects invalid rotation configuration without changing the account or queuing a task', async () => {
+    const { app, db, headers, repository, account } = await setup()
+    const before = repository.get(account.id)!
+    const overrides: AccountImportOverrides = {
+      modelWhitelist: [], modelMapping: {}, concurrency: 3, priority: 50, groupIds: [], loadFactor: null,
+      autoPauseOnExpired: true, proxyPolicy: 'direct', fixedProxyId: null
+    }
+    const url = `/api/accounts/${account.id}/totp/rotate`
+    for (const payload of [
+      { accountName: ' ' },
+      { accountName: 'new', importOverrides: { ...overrides, concurrency: -1 } },
+      { accountName: 'new', importOverrides: { ...overrides, modelMapping: { alias: '' } } },
+      { accountName: 'new', importOverrides: { ...overrides, proxyPolicy: 'fixed' } }
+    ]) {
+      expect((await app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(400)
+    }
+    vi.spyOn(Sub2APIClient.prototype, 'listProxies').mockResolvedValue([])
+    expect((await app.inject({ method: 'POST', url, headers, payload: {
+      accountName: 'new', importOverrides: { ...overrides, proxyPolicy: 'fixed', fixedProxyId: 999 }
+    } })).statusCode).toBe(400)
+    expect(repository.get(account.id)).toMatchObject({ sub2apiAccountName: before.sub2apiAccountName, importOverrides: before.importOverrides })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM jobs WHERE account_id = ?').get(account.id)).toEqual({ count: 0 })
   })
 
   it('does not queue an import when the 2FA workflow fails', async () => {
