@@ -1,26 +1,26 @@
 <template>
-  <section>
-    <div class="mb-4 flex flex-wrap items-center gap-3">
-      <div><h1 class="text-xl font-semibold">设置</h1><p class="mt-0.5 text-sm text-slate-500">配置版本 {{ version }}</p></div>
+  <section class="settings-page">
+    <div class="page-heading">
+      <div><h1>工作台设置</h1><p class="mt-0.5 text-sm text-slate-500">配置版本 {{ version }}</p></div>
       <div class="ml-auto flex w-full flex-wrap gap-2 sm:w-auto">
-        <button class="button" :disabled="testing" @click="testConnection"><LoaderCircle v-if="testing" :size="17" class="animate-spin" /><PlugZap v-else :size="17" />测试 Sub2API</button>
-        <button class="button button-primary" :disabled="saving || !settings" @click="save"><LoaderCircle v-if="saving" :size="17" class="animate-spin" /><Save v-else :size="17" />保存</button>
+        <button class="button" :disabled="testing" @click="testConnection"><LoaderCircle v-if="testing" :size="18" class="animate-spin" /><PlugZap v-else :size="18" />测试 Sub2API</button>
+        <button class="button button-primary" :disabled="saving || !settings" @click="save"><LoaderCircle v-if="saving" :size="18" class="animate-spin" /><Save v-else :size="18" />保存</button>
       </div>
     </div>
     <div v-if="message" class="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{{ message }}</div>
     <div v-if="error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ error }}</div>
 
-    <div v-if="!settings" class="panel flex h-48 items-center justify-center"><LoaderCircle :size="22" class="animate-spin text-slate-500" /></div>
+    <div v-if="!settings" class="panel flex h-48 items-center justify-center"><LoaderCircle :size="18" class="animate-spin text-slate-500" /></div>
     <div v-else class="space-y-5">
-      <section class="panel">
-        <header class="panel-header"><Clock3 :size="18" class="mr-2 text-slate-500" /><h2 class="font-semibold">检测与刷新</h2></header>
+      <section class="panel settings-cadence">
+        <header class="panel-header"><Clock3 :size="18" class="mr-2 text-slate-500" /><h2 class="font-medium">检测与刷新</h2></header>
         <div class="max-w-md p-4">
           <NumberField v-model="settings.scheduler.checkIntervalMinutes" label="主动检测间隔" suffix="分钟" :min="1" :max="1440" />
         </div>
       </section>
 
       <section class="panel">
-        <header class="panel-header"><SlidersHorizontal :size="18" class="mr-2 text-slate-500" /><h2 class="font-semibold">Sub2API 导入模板</h2></header>
+        <header class="panel-header"><SlidersHorizontal :size="18" class="mr-2 text-slate-500" /><h2 class="font-medium">Sub2API 导入模板</h2></header>
         <div class="grid gap-6 p-4 xl:grid-cols-2">
           <div class="space-y-4">
             <div class="grid gap-4 sm:grid-cols-2">
@@ -62,25 +62,25 @@
       </section>
 
       <section class="panel">
-        <header class="panel-header"><ShieldCheck :size="18" class="mr-2 text-slate-500" /><h2 class="font-semibold">模型白名单</h2><button class="button ml-auto" @click="addWhitelistRow"><Plus :size="16" />添加</button></header>
+        <header class="panel-header"><ShieldCheck :size="18" class="mr-2 text-slate-500" /><h2 class="font-medium">模型白名单</h2><button class="button ml-auto" @click="addWhitelistRow"><Plus :size="18" />添加</button></header>
         <div class="p-4">
           <div class="mb-2 grid grid-cols-[minmax(0,1fr)_44px] gap-3 text-xs font-medium text-slate-500"><span>模型 ID</span><span></span></div>
           <div v-for="(_, index) in whitelistRows" :key="index" class="mb-2 grid grid-cols-[minmax(0,1fr)_44px] gap-3">
             <input v-model="whitelistRows[index]" class="input font-mono" placeholder="gpt-5.4" aria-label="模型 ID" />
-            <button class="icon-button text-red-600" title="删除模型" aria-label="删除模型" @click="whitelistRows.splice(index, 1)"><Trash2 :size="16" /></button>
+            <button class="icon-button text-red-600" title="删除模型" aria-label="删除模型" @click="whitelistRows.splice(index, 1)"><Trash2 :size="18" /></button>
           </div>
           <div v-if="!whitelistRows.length" class="py-4 text-center text-sm text-slate-500">未设置模型白名单</div>
         </div>
       </section>
 
       <section class="panel">
-        <header class="panel-header"><Waypoints :size="18" class="mr-2 text-slate-500" /><h2 class="font-semibold">模型映射</h2><button class="button ml-auto" @click="addModelRow"><Plus :size="16" />添加</button></header>
+        <header class="panel-header"><Waypoints :size="18" class="mr-2 text-slate-500" /><h2 class="font-medium">模型映射</h2><button class="button ml-auto" @click="addModelRow"><Plus :size="18" />添加</button></header>
         <div class="p-4">
           <div class="mb-2 hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] gap-3 text-xs font-medium text-slate-500 sm:grid"><span>客户端模型</span><span>上游模型</span><span></span></div>
           <div v-for="(row, index) in modelRows" :key="index" class="mb-3 grid grid-cols-[minmax(0,1fr)_44px] gap-2 sm:mb-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] sm:gap-3">
             <input v-model="row.source" class="input min-w-0 font-mono" placeholder="客户端模型" aria-label="客户端模型" />
             <input v-model="row.target" class="input col-start-1 row-start-2 min-w-0 font-mono sm:col-start-auto sm:row-start-auto" placeholder="上游模型" aria-label="上游模型" />
-            <button class="icon-button col-start-2 row-start-1 text-red-600 sm:col-start-auto sm:row-start-auto" title="删除模型" aria-label="删除模型" @click="modelRows.splice(index, 1)"><Trash2 :size="16" /></button>
+            <button class="icon-button col-start-2 row-start-1 text-red-600 sm:col-start-auto sm:row-start-auto" title="删除模型" aria-label="删除模型" @click="modelRows.splice(index, 1)"><Trash2 :size="18" /></button>
           </div>
           <div v-if="!modelRows.length" class="py-4 text-center text-sm text-slate-500">未设置模型映射</div>
         </div>

@@ -1,13 +1,13 @@
 <template>
-  <section>
-    <div class="mb-4 flex flex-wrap items-center gap-3">
+  <section class="accounts-page">
+    <div class="page-heading">
       <div>
-        <h1 class="text-xl font-semibold">账号</h1>
+        <h1>账号管理</h1>
         <p class="mt-0.5 text-sm text-slate-500">{{ hasListFilter ? `匹配 ${total} 个账号` : `共 ${total} 个账号` }}</p>
       </div>
       <div class="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
         <div class="relative w-full sm:w-auto">
-          <Search class="pointer-events-none absolute left-3 top-3.5 text-slate-400" :size="17" />
+          <Search class="pointer-events-none absolute left-3 top-3.5 text-slate-400" :size="18" />
           <input v-model="search" class="input w-full pl-9 sm:w-64" placeholder="搜索邮箱" @input="debouncedLoad" />
         </div>
         <select v-model="healthStatusFilter" class="input w-full sm:w-36" aria-label="按账号状态筛选" @change="resetPageAndLoad">
@@ -20,58 +20,53 @@
           <option value="upstream_blocked">上游阻止</option>
           <option value="network_error">网络错误</option>
         </select>
-        <button class="button button-primary" @click="openImport"><Plus :size="17" />添加账号</button>
-        <button class="button" title="导出选中的账号---密码---2FA" :disabled="!selectedIds.length" @click="api.exportAccounts(selectedIds)"><Download :size="17" />导出选中 ({{ selectedIds.length }})</button>
+        <button class="button button-primary" @click="openImport"><Plus :size="18" />添加账号</button>
+        <button class="button" title="导出选中的账号---密码---2FA" :disabled="!selectedIds.length" @click="api.exportAccounts(selectedIds)"><Download :size="18" />导出选中 ({{ selectedIds.length }})</button>
         <button v-if="selectedIds.length" class="button" type="button" @click="selectedIds = []">清空选择</button>
-        <button class="icon-button" title="刷新列表" aria-label="刷新列表" @click="load"><RefreshCw :size="17" /></button>
+        <button class="icon-button" title="刷新列表" aria-label="刷新列表" @click="load"><RefreshCw :size="18" /></button>
       </div>
     </div>
 
     <div v-if="message" class="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{{ message }}</div>
     <div v-if="error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ error }}</div>
 
-    <section class="panel mb-4 p-4" aria-labelledby="usage-summary-title">
-      <div class="mb-4 flex flex-wrap items-start justify-between gap-2">
+    <section class="panel usage-overview" aria-labelledby="usage-summary-title">
+      <div class="usage-overview-header">
         <div>
-          <h2 id="usage-summary-title" class="text-sm font-semibold text-slate-900">总体用量窗口</h2>
-          <p class="mt-1 text-xs leading-5 text-slate-500">用量均值和预计剩余可用时间仅统计已授权、同步正常且健康的账号；已耗尽的账号不参与统计，未查询的窗口不参与平均。预计剩余可用时间排除已暂停调度的账号。</p>
+          <h2 id="usage-summary-title" class="text-slate-900">用量与可用时间</h2>
+          <p class="mt-1 text-xs leading-5 text-slate-500">已查询账号的平均占用</p>
         </div>
-        <span v-if="usageSummary" class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
+        <span v-if="usageSummary" class="usage-count">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
       </div>
-      <div v-if="usageSummary" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <div v-for="window in usageWindows" :key="window.label" class="rounded-md border border-slate-200 bg-slate-50 p-4">
-          <div class="flex items-start justify-between gap-3">
-            <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
-            <span class="text-lg font-semibold tabular-nums text-slate-900">{{ averageUsageLabel(window.averagePercent) }}</span>
-          </div>
-          <p class="mt-1 text-xs text-slate-500">已查询账号的平均占用</p>
-          <div class="mt-4 h-2 rounded-full bg-slate-200" aria-hidden="true">
-            <div class="h-2 rounded-full bg-emerald-600" :style="{ width: usageWidth(window.averagePercent) }" />
-          </div>
-          <p class="mt-3 text-xs text-slate-600">已查询 {{ window.queriedCount }}/{{ usageSummary.eligibleAccountCount }} 个</p>
+      <div v-if="usageSummary" class="usage-grid">
+        <div v-for="window in usageWindows" :key="window.label" class="usage-metric">
+          <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
+          <p class="usage-value">{{ averageUsageLabel(window.averagePercent) }}</p>
+          <p class="text-xs text-slate-600">已查询 {{ window.queriedCount }}/{{ usageSummary.eligibleAccountCount }} 个</p>
         </div>
-        <div class="rounded-md border p-4 sm:col-span-2 lg:col-span-1" :class="availabilityCardClass">
+        <div class="availability-metric" :class="availabilityCardClass" :data-status="availability?.status">
           <div class="flex items-start justify-between gap-3">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-700"><Clock3 :size="17" aria-hidden="true" />预计剩余可用时间</div>
+            <div class="flex items-center gap-2 text-sm font-medium text-slate-700"><Clock3 :size="18" aria-hidden="true" />预计剩余可用时间</div>
             <span class="rounded-full bg-white/80 px-2 py-1 text-xs font-medium text-slate-700">{{ availabilityWindowLabel }}</span>
           </div>
-          <p class="mt-3 text-2xl font-semibold tabular-nums text-slate-900">{{ availabilityPrimaryLabel }}</p>
+          <p class="mt-3 text-2xl font-medium tabular-nums text-slate-900">{{ availabilityPrimaryLabel }}</p>
           <p class="mt-2 text-xs leading-5 text-slate-600">{{ availabilityDetail }}</p>
           <p class="mt-3 border-t border-current/10 pt-3 text-xs font-medium text-slate-700">{{ availabilityRateLabel }}</p>
         </div>
       </div>
       <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
+      <details class="usage-policy"><summary class="cursor-pointer">统计口径 · 暂停调度账号不计入可用时间</summary><p class="mt-2">仅统计已授权、同步正常且健康的账号；耗尽账号不参与统计，未查询的窗口不参与平均。预计剩余可用时间排除已暂停调度的账号。</p></details>
     </section>
 
-    <div class="panel overflow-hidden">
-      <div v-if="loading" class="flex h-48 items-center justify-center text-slate-500"><LoaderCircle class="animate-spin" :size="22" /></div>
+    <div class="panel overflow-hidden account-list">
+      <div v-if="loading" class="flex h-48 items-center justify-center text-slate-500"><LoaderCircle class="animate-spin" :size="18" /></div>
       <div v-else-if="!accounts.length" class="flex h-48 flex-col items-center justify-center text-slate-500">
-        <Users :size="28" class="mb-2" />
+        <Users :size="18" class="mb-2" />
         <span>{{ hasListFilter ? '没有符合条件的账号' : '暂无账号' }}</span>
       </div>
       <div v-else>
         <div class="divide-y divide-slate-200 md:hidden">
-          <article v-for="account in accounts" :key="account.id" class="space-y-3 p-4">
+          <article v-for="account in accounts" :key="account.id" class="account-card space-y-4" :class="{ 'is-selected': selectedIds.includes(account.id) }">
             <div class="min-w-0">
               <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
               <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
@@ -97,34 +92,34 @@
             </div>
             <div class="text-xs text-slate-500">最近检查：{{ formatTime(account.lastCheckAt) }}</div>
             <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-              <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
+              <button class="button account-authorize" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="18" /><span>授权</span></button>
               <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
-                <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
+                <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="18" /><Play v-else-if="isSchedulingPaused(account)" :size="18" /><Pause v-else :size="18" />
               </button>
-              <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="16" /></button>
-              <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-              <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
+              <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="18" /></button>
+              <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="18" /></button>
+              <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="18" /></button>
             </div>
           </article>
         </div>
         <div class="hidden overflow-x-auto md:block">
-        <table class="min-w-[1570px] w-full table-fixed text-left text-sm">
+        <table class="accounts-table min-w-[1480px] w-full table-fixed text-left text-sm">
           <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
             <tr>
-              <th class="w-[54px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
-              <th class="w-[230px] px-4 py-3">邮箱</th>
-              <th class="w-[190px] px-4 py-3">Sub2API 名称</th>
-              <th class="w-[190px] px-3 py-3">授权结果</th>
-              <th class="w-[80px] whitespace-normal px-3 py-3 text-center">重授权次数</th>
-              <th class="w-[170px] px-3 py-3">用量窗口</th>
-              <th class="w-[112px] px-2 py-3 text-center">健康</th>
+              <th class="w-[48px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
+              <th class="w-[220px] px-4 py-3">邮箱</th>
+              <th class="w-[160px] px-4 py-3">Sub2API 名称</th>
+              <th class="w-[160px] px-3 py-3">授权结果</th>
+              <th class="w-[72px] whitespace-normal px-3 py-3 text-center">重授权次数</th>
+              <th class="w-[132px] px-3 py-3">用量窗口</th>
+              <th class="w-[100px] px-2 py-3 text-center">健康</th>
               <th class="w-[100px] px-4 py-3 text-center">同步</th>
-              <th class="w-[150px] px-4 py-3">最近检查</th>
-              <th class="sticky right-0 z-20 w-[320px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
+              <th class="w-[160px] px-4 py-3">最近检查</th>
+              <th class="sticky right-0 z-20 w-[292px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50">
+            <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50" :class="{ 'is-selected': selectedIds.includes(account.id) }">
               <td class="px-4 py-3"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /></td>
               <td class="px-4 py-3 font-medium"><div class="truncate" :title="account.email">{{ account.email }}</div><TotpRotationProgress v-if="account.totpRotationStatus" :account="account" :fallback-label="totpRotationLabel(account)" /></td>
               <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}</td>
@@ -155,13 +150,13 @@
               <td class="px-4 py-3 text-slate-500">{{ formatTime(account.lastCheckAt) }}</td>
               <td class="sticky right-0 z-10 border-l border-slate-200 bg-white px-4 py-3 group-hover:bg-slate-50">
                 <div class="flex justify-end gap-1">
-                  <button class="icon-button" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="16" /></button>
+                  <button class="button account-authorize" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="18" /><span>授权</span></button>
                   <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
-                    <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" /><Play v-else-if="isSchedulingPaused(account)" :size="16" /><Pause v-else :size="16" />
+                    <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="18" /><Play v-else-if="isSchedulingPaused(account)" :size="18" /><Pause v-else :size="18" />
                   </button>
-                  <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="16" /></button>
-                  <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="16" /></button>
-                  <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="16" /></button>
+                  <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="18" /></button>
+                  <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="18" /></button>
+                  <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="18" /></button>
                 </div>
               </td>
             </tr>
@@ -189,8 +184,8 @@
           <label class="label" for="credentialText">账号数据</label>
           <textarea id="credentialText" v-model="credentialText" class="textarea h-64 font-mono" spellcheck="false" placeholder="邮箱--密码--2FA密钥"></textarea>
           <div class="mt-4 flex gap-2">
-            <button class="button" :disabled="!credentialText.trim() || importing" @click="preview"><ScanSearch :size="17" />预检</button>
-            <button class="button button-primary" :disabled="!validCount || importing" @click="submitImport"><LoaderCircle v-if="importing" :size="17" class="animate-spin" /><Upload v-else :size="17" />导入 {{ validCount || '' }}</button>
+            <button class="button" :disabled="!credentialText.trim() || importing" @click="preview"><ScanSearch :size="18" />预检</button>
+            <button class="button button-primary" :disabled="!validCount || importing" @click="submitImport"><LoaderCircle v-if="importing" :size="18" class="animate-spin" /><Upload v-else :size="18" />导入 {{ validCount || '' }}</button>
           </div>
         </div>
         <div class="min-w-0">
@@ -217,7 +212,7 @@
     </ModalDialog>
 
     <ModalDialog v-model:open="authOpen" :title="authMode === 'rotate_totp' ? '更换 2FA 并导入 Sub2API' : '自动授权'" width="max-w-4xl">
-      <form class="space-y-5" @submit.prevent="queueAuthorization">
+      <form class="config-form space-y-6" @submit.prevent="queueAuthorization">
         <p v-if="authMode === 'rotate_totp'" class="text-sm leading-6 text-slate-600">确认后将更换并保存新 2FA，退出所有设备，再重新登录并按此配置导入 Sub2API。</p>
         <div><label class="label" for="sub2apiAccountName">Sub2API 账号名称</label><input id="sub2apiAccountName" v-model="authSub2apiName" class="input" maxlength="200" required /></div>
 
@@ -237,7 +232,7 @@
 
         <div v-if="!authUseGlobal" class="space-y-4">
           <section class="rounded-md border border-slate-200">
-            <header class="border-b border-slate-200 bg-slate-50 px-4 py-3"><h3 class="text-sm font-semibold text-slate-800">Sub2API 导入模板</h3></header>
+            <header class="border-b border-slate-200 bg-slate-50 px-4 py-3"><h3 class="text-sm font-medium text-slate-800">Sub2API 导入模板</h3></header>
             <div class="space-y-4 p-4">
               <div class="grid gap-4 sm:grid-cols-3">
                 <NumberField v-model="authOverrides.concurrency" label="并发数量" :min="0" :max="1000" />
@@ -281,13 +276,13 @@
 
           <section class="rounded-md border border-slate-200 p-4" aria-labelledby="accountModelMappingTitle">
             <div class="mb-3 flex items-center gap-3">
-              <h3 id="accountModelMappingTitle" class="text-sm font-semibold text-slate-800">模型映射</h3>
-              <button type="button" class="button ml-auto" @click="authModelRows.push({ source: '', target: '' })"><Plus :size="16" />添加</button>
+              <h3 id="accountModelMappingTitle" class="text-sm font-medium text-slate-800">模型映射</h3>
+              <button type="button" class="button ml-auto" @click="authModelRows.push({ source: '', target: '' })"><Plus :size="18" />添加</button>
             </div>
             <div v-for="(row, index) in authModelRows" :key="index" class="mb-3 grid grid-cols-[minmax(0,1fr)_44px] gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] sm:gap-3">
               <label class="min-w-0"><span class="label">客户端模型</span><input v-model="row.source" class="input min-w-0 font-mono" placeholder="客户端模型 ID" spellcheck="false" /></label>
               <label class="col-start-1 row-start-2 min-w-0 sm:col-start-auto sm:row-start-auto"><span class="label">上游模型</span><input v-model="row.target" class="input min-w-0 font-mono" placeholder="上游模型 ID" spellcheck="false" /></label>
-              <button type="button" class="icon-button col-start-2 row-start-1 mt-6 h-11 w-11 text-red-600 sm:col-start-auto sm:row-start-auto" title="删除模型映射" :aria-label="`删除第 ${index + 1} 条模型映射`" @click="authModelRows.splice(index, 1)"><Trash2 :size="16" /></button>
+              <button type="button" class="icon-button col-start-2 row-start-1 mt-6 h-11 w-11 text-red-600 sm:col-start-auto sm:row-start-auto" title="删除模型映射" :aria-label="`删除第 ${index + 1} 条模型映射`" @click="authModelRows.splice(index, 1)"><Trash2 :size="18" /></button>
             </div>
             <p v-if="!authModelRows.length" class="py-3 text-center text-sm text-slate-500">未设置模型映射</p>
             <p class="mt-2 text-xs leading-5 text-slate-500">仅使用该账号的映射，留空表示不添加额外映射；同名映射优先于白名单，后续自动重授权继续使用。</p>
@@ -295,7 +290,7 @@
         </div>
 
         <div v-if="authError" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ authError }}</div>
-        <div class="flex justify-end gap-2"><button type="button" class="button" @click="authOpen = false">取消</button><button class="button button-primary" :disabled="!authSub2apiName.trim() || authorizing"><LoaderCircle v-if="authorizing" :size="17" class="animate-spin" /><KeyRound v-else-if="authMode === 'rotate_totp'" :size="17" /><Bot v-else :size="17" />{{ authMode === 'rotate_totp' ? '开始更换 2FA' : '开始自动授权' }}</button></div>
+        <div class="dialog-footer flex justify-end gap-2"><button type="button" class="button" @click="authOpen = false">取消</button><button class="button button-primary" :disabled="!authSub2apiName.trim() || authorizing"><LoaderCircle v-if="authorizing" :size="18" class="animate-spin" /><KeyRound v-else-if="authMode === 'rotate_totp'" :size="18" /><Bot v-else :size="18" />{{ authMode === 'rotate_totp' ? '开始更换 2FA' : '开始自动授权' }}</button></div>
       </form>
     </ModalDialog>
   </section>

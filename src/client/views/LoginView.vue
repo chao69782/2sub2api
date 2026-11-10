@@ -1,11 +1,11 @@
 <template>
-  <main class="flex min-h-screen items-center justify-center bg-slate-100 px-4">
-    <form class="w-full max-w-sm rounded-md border border-slate-200 bg-white p-6 shadow-sm" @submit.prevent="submit">
+  <main class="login-page flex min-h-screen items-center justify-center bg-slate-100 px-4">
+    <form class="login-card w-full max-w-sm rounded-md border border-slate-200 bg-white p-6 shadow-sm" @submit.prevent="submit">
       <div class="mb-6 flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-700 font-semibold text-white">OA</div>
+        <div class="brand-mark">OA</div>
         <div>
           <h1 class="text-lg font-semibold">账号授权工作台</h1>
-          <p class="text-sm text-slate-500">管理员登录</p>
+          <p class="text-sm text-slate-500">管理员入口 · 授权与凭据管理</p>
         </div>
       </div>
       <label class="label" for="username">账号</label>
@@ -14,8 +14,8 @@
       <input id="password" v-model="password" class="input" type="password" autocomplete="current-password" required />
       <p v-if="error" class="mt-3 text-sm text-red-600" role="alert">{{ error }}</p>
       <button class="button button-primary mt-5 w-full" :disabled="loading">
-        <LoaderCircle v-if="loading" :size="17" class="animate-spin" />
-        <LogIn v-else :size="17" />
+        <LoaderCircle v-if="loading" :size="18" class="animate-spin" />
+        <LogIn v-else :size="18" />
         登录
       </button>
     </form>
