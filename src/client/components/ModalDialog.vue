@@ -1,8 +1,8 @@
 <template>
   <Teleport to="body">
-    <div v-if="open" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" @mousedown.self="emit('update:open', false)">
-      <section ref="dialog" class="dialog-surface max-h-[90vh] w-full overflow-auto rounded-md bg-white shadow-xl" :class="width" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="handleKeydown">
-        <header class="dialog-header flex h-16 items-center border-b border-slate-200 px-5"><h2 class="font-medium">{{ title }}</h2><button class="icon-button ml-auto" title="关闭" aria-label="关闭" @click="emit('update:open', false)"><X :size="18" /></button></header>
+    <div v-if="open" class="dialog-backdrop" @mousedown.self="emit('update:open', false)">
+      <section ref="dialog" class="dialog-surface w-full" :class="width" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="handleKeydown">
+        <header class="dialog-header"><h2>{{ title }}</h2><button class="icon-button ml-auto" title="关闭" aria-label="关闭" @click="emit('update:open', false)"><X :size="18" /></button></header>
         <div class="dialog-body"><slot /></div>
       </section>
     </div>

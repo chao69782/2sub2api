@@ -1,19 +1,15 @@
 <template>
-  <main class="login-page flex min-h-screen items-center justify-center bg-slate-100 px-4">
-    <form class="login-card w-full max-w-sm rounded-md border border-slate-200 bg-white p-6 shadow-sm" @submit.prevent="submit">
-      <div class="mb-6 flex items-center gap-3">
-        <div class="brand-mark">OA</div>
-        <div>
-          <h1 class="text-lg font-semibold">账号授权工作台</h1>
-          <p class="text-sm text-slate-500">管理员入口 · 授权与凭据管理</p>
-        </div>
-      </div>
+  <main class="login-page flex min-h-screen items-center justify-center px-4">
+    <form class="login-card w-full max-w-sm" @submit.prevent="submit">
+      <div class="brand-mark mb-6">OA</div>
+      <h1>账号授权工作台</h1>
+      <p class="login-description">管理员入口 · 授权与凭据管理</p>
       <label class="label" for="username">账号</label>
       <input id="username" v-model="username" class="input mb-4" autocomplete="username" required autofocus />
       <label class="label" for="password">密码</label>
       <input id="password" v-model="password" class="input" type="password" autocomplete="current-password" required />
       <p v-if="error" class="mt-3 text-sm text-red-600" role="alert">{{ error }}</p>
-      <button class="button button-primary mt-5 w-full" :disabled="loading">
+      <button class="button button-primary mt-6 w-full" :disabled="loading" :aria-busy="loading">
         <LoaderCircle v-if="loading" :size="18" class="animate-spin" />
         <LogIn v-else :size="18" />
         登录

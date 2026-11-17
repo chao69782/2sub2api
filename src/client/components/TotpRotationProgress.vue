@@ -1,6 +1,6 @@
 <template>
   <details v-if="progress" class="rotation-track mt-1 whitespace-normal text-left text-xs font-normal" :open="progress.status !== 'completed'" :aria-label="`${account.email} 的操作步骤`">
-    <summary class="flex min-h-11 cursor-pointer items-center gap-2 rounded py-1 leading-5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600" :class="tone(progress.status)">
+    <summary class="flex min-h-11 cursor-pointer items-center gap-2 rounded py-1 leading-5" :class="tone(progress.status)">
       <LoaderCircle v-if="progress.status === 'running'" :size="18" class="shrink-0 animate-spin" aria-hidden="true" />
       <CircleAlert v-else-if="progress.status === 'failed'" :size="18" class="shrink-0" aria-hidden="true" />
       <CircleCheck v-else-if="progress.status === 'completed'" :size="18" class="shrink-0" aria-hidden="true" />

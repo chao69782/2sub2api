@@ -3,14 +3,56 @@
     <div class="page-heading">
       <div>
         <h1>账号管理</h1>
-        <p class="mt-0.5 text-sm text-slate-500">{{ hasListFilter ? `匹配 ${total} 个账号` : `共 ${total} 个账号` }}</p>
+        <p class="page-description">管理授权、凭据与 Sub2API 同步</p>
       </div>
       <div class="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
-        <div class="relative w-full sm:w-auto">
-          <Search class="pointer-events-none absolute left-3 top-3.5 text-slate-400" :size="18" />
-          <input v-model="search" class="input w-full pl-9 sm:w-64" placeholder="搜索邮箱" @input="debouncedLoad" />
+        <button class="button button-primary" @click="openImport"><Plus :size="18" />添加账号</button>
+        <button class="icon-button" title="刷新列表" aria-label="刷新列表" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{ 'animate-spin': loading }" /></button>
+      </div>
+    </div>
+
+    <div v-if="message" class="notice notice-success" role="status">{{ message }}</div>
+    <div v-if="error" class="notice notice-error" role="alert">{{ error }}</div>
+
+    <section class="panel usage-overview" aria-labelledby="usage-summary-title">
+      <div class="usage-overview-header">
+        <div>
+          <h2 id="usage-summary-title" class="text-slate-900">用量与可用时间</h2>
+          <p class="mt-1 text-xs leading-5 text-slate-500">已查询账号的平均占用</p>
         </div>
-        <select v-model="healthStatusFilter" class="input w-full sm:w-36" aria-label="按账号状态筛选" @change="resetPageAndLoad">
+        <span v-if="usageSummary" class="usage-count">纳入统计 <span class="metric-meta">{{ usageSummary.eligibleAccountCount }} / {{ usageSummary.accountCount }}</span> 个账号</span>
+      </div>
+      <div v-if="usageSummary" class="usage-grid">
+        <div v-for="window in usageWindows" :key="window.label" class="usage-metric">
+          <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
+          <p class="usage-value">{{ averageUsageLabel(window.averagePercent) }}</p>
+          <p class="text-xs text-slate-500">已查询 {{ window.queriedCount }} / {{ usageSummary.eligibleAccountCount }} 个账号</p>
+        </div>
+        <div class="availability-metric" :data-status="availability?.status">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2 text-sm font-medium text-slate-700"><Clock3 :size="18" aria-hidden="true" />预计剩余可用时间</div>
+            <span class="text-xs text-slate-500">{{ availabilityWindowLabel }}</span>
+          </div>
+          <p class="availability-value">{{ availabilityPrimaryLabel }}</p>
+          <p class="mt-2 text-xs leading-5 text-slate-500">{{ availabilityDetail }}</p>
+          <p class="mt-2 text-xs font-medium leading-5 text-slate-600">{{ availabilityRateLabel }}</p>
+        </div>
+      </div>
+      <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
+      <details class="usage-policy"><summary>统计口径<span class="hidden sm:inline"> · 暂停调度账号不计入可用时间</span></summary><p class="mt-2">仅统计已授权、同步正常且健康的账号；耗尽账号不参与统计，未查询的窗口不参与平均。预计剩余可用时间排除已暂停调度的账号。</p></details>
+    </section>
+
+    <div class="panel account-list">
+      <div class="account-list-heading">
+        <h2>账号列表 <span class="list-count">{{ total }}</span></h2>
+        <span class="text-xs text-slate-500">{{ selectedIds.length ? `已选择 ${selectedIds.length} 个账号` : hasListFilter ? '已应用筛选' : '全部账号' }}</span>
+      </div>
+      <div class="account-toolbar" :class="{ 'has-selection': selectedIds.length > 0 }">
+        <div class="account-search relative">
+          <Search class="pointer-events-none absolute left-3 top-3.5 text-slate-400" :size="18" />
+          <input v-model="search" class="input pl-9" aria-label="搜索邮箱" placeholder="搜索邮箱" @input="debouncedLoad" />
+        </div>
+        <select v-model="healthStatusFilter" class="input account-status-filter" aria-label="按账号状态筛选" @change="resetPageAndLoad">
           <option value="">全部状态</option>
           <option value="healthy">健康</option>
           <option value="unknown">未知</option>
@@ -20,49 +62,16 @@
           <option value="upstream_blocked">上游阻止</option>
           <option value="network_error">网络错误</option>
         </select>
-        <button class="button button-primary" @click="openImport"><Plus :size="18" />添加账号</button>
-        <button class="button" title="导出选中的账号---密码---2FA" :disabled="!selectedIds.length" @click="api.exportAccounts(selectedIds)"><Download :size="18" />导出选中 ({{ selectedIds.length }})</button>
-        <button v-if="selectedIds.length" class="button" type="button" @click="selectedIds = []">清空选择</button>
-        <button class="icon-button" title="刷新列表" aria-label="刷新列表" @click="load"><RefreshCw :size="18" /></button>
-      </div>
-    </div>
-
-    <div v-if="message" class="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{{ message }}</div>
-    <div v-if="error" class="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ error }}</div>
-
-    <section class="panel usage-overview" aria-labelledby="usage-summary-title">
-      <div class="usage-overview-header">
-        <div>
-          <h2 id="usage-summary-title" class="text-slate-900">用量与可用时间</h2>
-          <p class="mt-1 text-xs leading-5 text-slate-500">已查询账号的平均占用</p>
-        </div>
-        <span v-if="usageSummary" class="usage-count">纳入统计 {{ usageSummary.eligibleAccountCount }}/{{ usageSummary.accountCount }} 个账号</span>
-      </div>
-      <div v-if="usageSummary" class="usage-grid">
-        <div v-for="window in usageWindows" :key="window.label" class="usage-metric">
-          <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
-          <p class="usage-value">{{ averageUsageLabel(window.averagePercent) }}</p>
-          <p class="text-xs text-slate-600">已查询 {{ window.queriedCount }}/{{ usageSummary.eligibleAccountCount }} 个</p>
-        </div>
-        <div class="availability-metric" :class="availabilityCardClass" :data-status="availability?.status">
-          <div class="flex items-start justify-between gap-3">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-700"><Clock3 :size="18" aria-hidden="true" />预计剩余可用时间</div>
-            <span class="rounded-full bg-white/80 px-2 py-1 text-xs font-medium text-slate-700">{{ availabilityWindowLabel }}</span>
-          </div>
-          <p class="mt-3 text-2xl font-medium tabular-nums text-slate-900">{{ availabilityPrimaryLabel }}</p>
-          <p class="mt-2 text-xs leading-5 text-slate-600">{{ availabilityDetail }}</p>
-          <p class="mt-3 border-t border-current/10 pt-3 text-xs font-medium text-slate-700">{{ availabilityRateLabel }}</p>
+        <div class="account-batch-actions">
+          <button v-if="selectedIds.length" class="button button-quiet" type="button" @click="selectedIds = []">清空选择</button>
+          <button class="button" title="导出选中的账号---密码---2FA" :disabled="!selectedIds.length" @click="api.exportAccounts(selectedIds)"><Download :size="18" />导出选中<span v-if="selectedIds.length" class="metric-meta">{{ selectedIds.length }}</span></button>
         </div>
       </div>
-      <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
-      <details class="usage-policy"><summary class="cursor-pointer">统计口径 · 暂停调度账号不计入可用时间</summary><p class="mt-2">仅统计已授权、同步正常且健康的账号；耗尽账号不参与统计，未查询的窗口不参与平均。预计剩余可用时间排除已暂停调度的账号。</p></details>
-    </section>
-
-    <div class="panel overflow-hidden account-list">
       <div v-if="loading" class="flex h-48 items-center justify-center text-slate-500"><LoaderCircle class="animate-spin" :size="18" /></div>
-      <div v-else-if="!accounts.length" class="flex h-48 flex-col items-center justify-center text-slate-500">
-        <Users :size="18" class="mb-2" />
-        <span>{{ hasListFilter ? '没有符合条件的账号' : '暂无账号' }}</span>
+      <div v-else-if="!accounts.length" class="account-empty">
+        <Users :size="18" aria-hidden="true" />
+        <h3>{{ hasListFilter ? '没有符合条件的账号' : '添加第一个账号' }}</h3>
+        <p>{{ hasListFilter ? '试试其他邮箱或账号状态' : '导入邮箱、密码和 2FA 密钥，开始管理账号授权' }}</p>
       </div>
       <div v-else>
         <div class="divide-y divide-slate-200 md:hidden">
@@ -103,19 +112,19 @@
           </article>
         </div>
         <div class="hidden overflow-x-auto md:block">
-        <table class="accounts-table min-w-[1480px] w-full table-fixed text-left text-sm">
-          <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium uppercase text-slate-500">
+        <table class="accounts-table min-w-[1280px] w-full table-fixed text-left text-sm">
+          <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
             <tr>
-              <th class="w-[48px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
-              <th class="w-[220px] px-4 py-3">邮箱</th>
-              <th class="w-[160px] px-4 py-3">Sub2API 名称</th>
-              <th class="w-[160px] px-3 py-3">授权结果</th>
-              <th class="w-[72px] whitespace-normal px-3 py-3 text-center">重授权次数</th>
-              <th class="w-[132px] px-3 py-3">用量窗口</th>
+              <th class="w-[44px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
+              <th class="w-[208px] px-4 py-3">邮箱</th>
+              <th class="w-[128px] px-4 py-3">Sub2API 名称</th>
+              <th class="w-[144px] px-3 py-3">授权结果</th>
+              <th class="w-[68px] px-3 py-3 text-center"><span class="block">重授权</span><span class="block">次数</span></th>
+              <th class="w-[128px] px-3 py-3">用量窗口</th>
               <th class="w-[100px] px-2 py-3 text-center">健康</th>
-              <th class="w-[100px] px-4 py-3 text-center">同步</th>
-              <th class="w-[160px] px-4 py-3">最近检查</th>
-              <th class="sticky right-0 z-20 w-[292px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
+              <th class="w-[84px] px-4 py-3 text-center">同步</th>
+              <th class="w-[132px] px-4 py-3">最近检查</th>
+              <th class="sticky right-0 z-20 w-[248px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
@@ -164,7 +173,7 @@
         </table>
         </div>
       </div>
-      <nav v-if="!loading && total > 0" class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm text-slate-600" aria-label="账号列表分页">
+      <nav v-if="!loading && total > 0" class="account-pagination" aria-label="账号列表分页">
         <span>显示 {{ pageStart }}–{{ pageEnd }} / {{ total }} 个账号</span>
         <div class="flex flex-wrap items-center gap-2">
           <label for="account-page-size">每页</label>
@@ -179,26 +188,30 @@
     </div>
 
     <ModalDialog v-model:open="importOpen" title="添加账号" width="max-w-5xl">
-      <div class="grid gap-5 lg:grid-cols-[1.1fr_1fr]">
-        <div>
-          <label class="label" for="credentialText">账号数据</label>
-          <textarea id="credentialText" v-model="credentialText" class="textarea h-64 font-mono" spellcheck="false" placeholder="邮箱--密码--2FA密钥"></textarea>
-          <div class="mt-4 flex gap-2">
-            <button class="button" :disabled="!credentialText.trim() || importing" @click="preview"><ScanSearch :size="18" />预检</button>
-            <button class="button button-primary" :disabled="!validCount || importing" @click="submitImport"><LoaderCircle v-if="importing" :size="18" class="animate-spin" /><Upload v-else :size="18" />导入 {{ validCount || '' }}</button>
-          </div>
+      <p class="dialog-intro">粘贴账号数据，导入时自动检查格式并跳过重复邮箱</p>
+      <div class="import-layout">
+        <div class="import-editor">
+          <div class="mb-2 flex items-center justify-between gap-2"><label class="label mb-0" for="credentialText">账号数据</label><span class="text-xs text-slate-500">每行一个账号</span></div>
+          <textarea id="credentialText" v-model="credentialText" class="textarea font-mono" spellcheck="false" placeholder="邮箱--密码--2FA密钥" :disabled="importing" @input="previewRows = []; importError = ''"></textarea>
+          <p class="mt-2 text-xs leading-5 text-slate-500">支持连续两个及以上半角 - 作为分隔符</p>
         </div>
-        <div class="min-w-0">
-          <div class="mb-2 flex items-center justify-between"><span class="text-sm font-medium">预检结果</span><span class="text-xs text-slate-500">有效 {{ validCount }}</span></div>
-          <div class="h-[354px] overflow-auto rounded-md border border-slate-200">
-            <table class="w-full text-left text-sm">
+        <div class="import-results">
+          <div class="mb-2 flex items-center justify-between"><span class="text-sm font-medium">检查结果</span><span class="text-xs text-slate-500">有效 {{ validCount }}</span></div>
+          <div class="import-result-surface" aria-live="polite" :aria-busy="importing">
+            <table v-if="previewRows.length" class="w-full text-left text-sm">
               <thead class="sticky top-0 bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-2">行</th><th class="px-3 py-2">邮箱</th><th class="px-3 py-2">状态</th></tr></thead>
               <tbody class="divide-y divide-slate-100">
-                <tr v-for="row in previewRows" :key="String(row.line)"><td class="px-3 py-2">{{ row.line }}</td><td class="max-w-48 truncate px-3 py-2">{{ row.email || row.message }}</td><td class="px-3 py-2"><StatusBadge :value="String(row.status)" /></td></tr>
+                <tr v-for="row in previewRows" :key="String(row.line)"><td class="px-3 py-3">{{ row.line }}</td><td class="max-w-48 break-words px-3 py-3" :title="String(row.message)">{{ row.email || row.message }}</td><td class="px-3 py-3"><StatusBadge :value="String(row.status)" /></td></tr>
               </tbody>
             </table>
+            <div v-else class="import-result-empty"><ScanSearch :size="18" aria-hidden="true" /><p>{{ importing ? '正在检查账号数据…' : '点击导入后显示检查结果' }}</p></div>
           </div>
         </div>
+      </div>
+      <div v-if="importError" class="notice notice-error mt-4 mb-0" role="alert">{{ importError }}</div>
+      <div class="dialog-footer flex flex-wrap items-center justify-between gap-3">
+        <p class="text-xs leading-5 text-slate-500">有效账号将直接导入，无效行自动跳过</p>
+        <button class="button button-primary" :disabled="!credentialText.trim() || importing" :aria-busy="importing" @click="submitImport"><LoaderCircle v-if="importing" :size="18" class="animate-spin" /><Upload v-else :size="18" />{{ importing ? '导入中…' : '导入' }}</button>
       </div>
     </ModalDialog>
 
@@ -219,11 +232,11 @@
         <fieldset class="rounded-md border border-slate-200 p-4">
           <legend class="px-1 text-sm font-medium text-slate-800">账号导入配置</legend>
           <div class="grid gap-3 sm:grid-cols-2">
-            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors" :class="authUseGlobal ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'">
+            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition-colors" :class="authUseGlobal ? 'bg-emerald-50' : 'hover:bg-slate-50'">
               <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="true" />
               <span><span class="block text-sm font-medium text-slate-800">使用全局配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">跟随设置页中的导入模板、模型白名单和模型映射</span></span>
             </label>
-            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors" :class="!authUseGlobal ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50'">
+            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition-colors" :class="!authUseGlobal ? 'bg-emerald-50' : 'hover:bg-slate-50'">
               <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="false" />
               <span><span class="block text-sm font-medium text-slate-800">使用账号专属配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">保存到该账号，后续自动重授权继续使用</span></span>
             </label>
@@ -326,11 +339,6 @@ const usageWindows = computed(() => {
 })
 const availability = computed(() => usageSummary.value?.availability ?? null)
 const availabilityWindowLabel = computed(() => availability.value?.limitingWindow === 'five_hour' ? '5 小时窗口' : availability.value?.limitingWindow === 'seven_day' ? '7 天窗口' : '等待数据')
-const availabilityCardClass = computed(() => availability.value?.status === 'exhausts_before_reset'
-  ? 'border-amber-200 bg-amber-50'
-  : availability.value?.status === 'sustainable_until_reset'
-    ? 'border-emerald-200 bg-emerald-50'
-    : 'border-slate-200 bg-slate-50')
 const availabilityPrimaryLabel = computed(() => {
   const estimate = availability.value
   if (!estimate || estimate.status === 'insufficient_data' || estimate.remainingSeconds === null) return '样本不足'
@@ -360,6 +368,7 @@ const hasListFilter = computed(() => Boolean(search.value.trim() || healthStatus
 const error = ref('')
 const message = ref('')
 const importOpen = ref(false)
+const importError = ref('')
 const credentialText = ref('')
 const previewRows = ref<Array<Record<string, unknown>>>([])
 const validCount = computed(() => previewRows.value.filter((row) => row.status === 'valid').length)
@@ -512,9 +521,30 @@ async function loadAuthorizationMetadata() {
 }
 async function pollStatuses() { if (!loading.value) await refreshAccounts(false) }
 function debouncedLoad() { page.value = 1; listRequestId += 1; loading.value = true; window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
-function openImport() { credentialText.value = ''; previewRows.value = []; importOpen.value = true }
-async function preview() { try { const response = await api.previewImport(credentialText.value); previewRows.value = response.rows } catch (e) { setResult(e instanceof Error ? e.message : '预检失败', true) } }
-async function submitImport() { importing.value = true; try { const result = await api.importAccounts(credentialText.value); importOpen.value = false; setResult(`已导入 ${result.created.length} 个账号${result.errors.length ? `，${result.errors.length} 行未导入` : ''}`); await load() } catch (e) { setResult(e instanceof Error ? e.message : '导入失败', true) } finally { importing.value = false } }
+function openImport() { credentialText.value = ''; previewRows.value = []; importError.value = ''; importOpen.value = true }
+async function submitImport() {
+  if (importing.value || !credentialText.value.trim()) return
+  const text = credentialText.value
+  importing.value = true
+  importError.value = ''
+  previewRows.value = []
+  try {
+    const preview = await api.previewImport(text)
+    previewRows.value = preview.rows
+    if (!preview.validCount) {
+      importError.value = '没有可导入的账号，请检查格式或重复邮箱'
+      return
+    }
+    const result = await api.importAccounts(text)
+    importOpen.value = false
+    setResult(`已导入 ${result.created.length} 个账号${result.errors.length ? `，${result.errors.length} 行未导入` : ''}`)
+    await load()
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : '导入失败'
+  } finally {
+    importing.value = false
+  }
+}
 async function openCredentials(account: ManagedAccount) {
   try {
     credentials.value = await api.viewCredentials(account.id)

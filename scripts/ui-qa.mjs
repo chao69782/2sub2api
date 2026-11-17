@@ -28,17 +28,14 @@ const bodyWidth = await page.locator('body').evaluate((element) => element.scrol
 if (bodyWidth > 375) failures.push(`mobile body scrollWidth ${bodyWidth}px exceeds viewport`)
 
 await page.getByRole('button', { name: '添加账号' }).click()
+await page.getByRole('dialog').evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
 const email = `qa-${Date.now()}@example.com`
 await page.getByLabel('账号数据').fill(`${email}----Password-For-QA------JBSWY3DPEHPK3PXP`)
-await Promise.all([
-  page.waitForResponse((response) => response.url().includes('/api/accounts/import/preview') && response.status() === 200),
-  page.getByRole('button', { name: '预检' }).click()
-])
-await page.getByText(email).waitFor()
 await page.screenshot({ path: path.join(outputDirectory, 'import-mobile.png'), fullPage: true })
 await Promise.all([
+  page.waitForResponse((response) => response.url().includes('/api/accounts/import/preview') && response.status() === 200),
   page.waitForResponse((response) => response.url().endsWith('/api/accounts/import') && response.status() === 201),
-  page.getByRole('button', { name: /^导入 1$/ }).click()
+  page.getByRole('button', { name: '导入', exact: true }).click()
 ])
 await page.getByRole('dialog').waitFor({ state: 'hidden' })
 await page.locator('article').getByText(email, { exact: true }).waitFor()
@@ -46,8 +43,10 @@ await page.screenshot({ path: path.join(outputDirectory, 'account-row-mobile.png
 const bodyWidthWithAccount = await page.locator('body').evaluate((element) => element.scrollWidth)
 if (bodyWidthWithAccount > 375) failures.push(`mobile account list scrollWidth ${bodyWidthWithAccount}px exceeds viewport`)
 
-await page.getByRole('link', { name: '设置' }).click()
-await page.waitForResponse((response) => response.url().includes('/api/metadata/proxies'))
+await Promise.all([
+  page.waitForResponse((response) => response.url().includes('/api/metadata/proxies')),
+  page.getByRole('link', { name: '设置' }).click()
+])
 await page.screenshot({ path: path.join(outputDirectory, 'settings-mobile.png'), fullPage: true })
 await page.setViewportSize({ width: 1440, height: 900 })
 await page.screenshot({ path: path.join(outputDirectory, 'settings-desktop.png'), fullPage: true })
