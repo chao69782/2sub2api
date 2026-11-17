@@ -17,19 +17,28 @@ const emit = defineEmits<{ 'update:open': [value: boolean] }>()
 const dialog = ref<HTMLElement | null>(null)
 let previousFocus: HTMLElement | null = null
 let previousOverflow = ''
+let previousPaddingRight = ''
+function restoreBodyScroll() {
+  document.body.style.overflow = previousOverflow
+  document.body.style.paddingRight = previousPaddingRight
+}
 watch(() => props.open, async (open) => {
   if (open) {
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     previousOverflow = document.body.style.overflow
+    previousPaddingRight = document.body.style.paddingRight
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth
+    const paddingRight = Number.parseFloat(window.getComputedStyle(document.body).paddingRight)
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${paddingRight + scrollbarWidth}px`
     document.body.style.overflow = 'hidden'
     await nextTick()
     dialog.value?.focus({ preventScroll: true })
   } else {
-    document.body.style.overflow = previousOverflow
+    restoreBodyScroll()
     previousFocus?.focus({ preventScroll: true })
   }
 })
-onUnmounted(() => { if (props.open) document.body.style.overflow = previousOverflow })
+onUnmounted(() => { if (props.open) restoreBodyScroll() })
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); emit('update:open', false); return }
   if (event.key !== 'Tab' || !dialog.value) return

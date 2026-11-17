@@ -39,7 +39,6 @@
         </div>
       </div>
       <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
-      <details class="usage-policy"><summary>统计口径<span class="hidden sm:inline"> · 暂停调度账号不计入可用时间</span></summary><p class="mt-2">仅统计已授权、同步正常且健康的账号；耗尽账号不参与统计，未查询的窗口不参与平均。预计剩余可用时间排除已暂停调度的账号。</p></details>
     </section>
 
     <div class="panel account-list">

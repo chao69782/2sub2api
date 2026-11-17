@@ -38,6 +38,8 @@
 
 ## 方法来源
 
+后续反馈修正：移除用量区的“统计口径”说明和分隔线；弹窗锁定滚动时补偿滚动条宽度，关闭或卸载时恢复；移除弹窗入场动画，避免页面宽度变化和位移闪动。
+
 使用 UI/UX Pro Max 检查表格、表单与交互；使用 unslop 的九轮方法进行轻量优化。
 
 unslop by Damir Sokolovsky ([@heydamir](https://x.com/heydamir))，CC BY 4.0。

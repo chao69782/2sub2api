@@ -88,9 +88,6 @@
 .availability-value { margin-top: 12px; font-size: 30px; line-height: 40px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .availability-metric[data-status="sustainable_until_reset"] .availability-value { color: var(--accent); }
 .availability-metric[data-status="exhausts_before_reset"] .availability-value { color: #92400e; }
-.usage-policy { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--ink-muted); font-size: 12px; line-height: 20px; }
-.usage-policy summary { width: fit-content; }
-.usage-policy summary:hover { color: var(--ink-secondary); }
 
 .account-list { overflow: hidden; }
 .account-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px 0; }
@@ -122,7 +119,7 @@
 .account-pagination .input { height: 36px; font-size: 12px; }
 
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 24px; background: #101a1466; }
-.dialog-surface { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 16px 64px #17251d24; animation: dialog-enter 180ms var(--ease); }
+.dialog-surface { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 16px 64px #17251d24; }
 .dialog-header { display: flex; flex-shrink: 0; align-items: center; min-height: 72px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
 .dialog-header h2 { font-size: 17px; line-height: 24px; font-weight: 500; }
 .dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
@@ -161,7 +158,6 @@
 .rotation-track summary > span { word-break: keep-all; }
 .rotation-track summary > .lucide:last-child { transition: transform 150ms var(--ease); }
 .rotation-track[open] summary > .lucide:last-child { transform: rotate(180deg); }
-@keyframes dialog-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 1100px) {
   .settings-section { grid-template-columns: 208px minmax(0, 1fr); gap: 24px; }
