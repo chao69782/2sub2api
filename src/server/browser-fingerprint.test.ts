@@ -150,6 +150,7 @@ describe('protocol OAuth helpers', () => {
     expect(isMfaStep({ page: { type: 'mfa_challenge' } }, '')).toBe(true)
     expect(isEmailOtpStep({ page: { type: 'email_verification' } }, '')).toBe(true)
     expect(isEmailOtpStep({ page: { type: 'login_password' } }, 'https://auth.openai.com/log-in/password')).toBe(false)
+    expect(isEmailOtpStep({}, '/log-in/password?next=/email-verification')).toBe(false)
   })
 
   it('reads workspace id from oai-client-auth-session cookie', async () => {

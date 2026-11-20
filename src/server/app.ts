@@ -637,7 +637,6 @@ export async function buildApp(config: AppConfig, db: WorkbenchDatabase): Promis
           email: account.email,
           ...secrets,
           pendingTotpSecret: accounts.getPendingTotpSecret(account.id),
-          getAuthUrl: async () => (await sub2api.generateOpenAIAuthUrl(null)).auth_url,
           secretSaved: job.payload.secretSaved === true,
           stageSecret: (secret) => accounts.stageTotpSecret(account.id, secret),
           saveSecret: () => db.transaction(() => {

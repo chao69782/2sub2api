@@ -38,7 +38,6 @@ export class OpenAIAuthDriver {
     password: string
     totpSecret: string
     pendingTotpSecret: string | null
-    getAuthUrl: () => Promise<string>
     secretSaved?: boolean
     stageSecret: (secret: string) => void
     saveSecret: () => string
