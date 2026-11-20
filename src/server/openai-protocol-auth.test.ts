@@ -1,8 +1,11 @@
 import { authenticator } from 'otplib'
 import { describe, expect, it, vi } from 'vitest'
+import * as http from './chrome-http.js'
 import type { ChromeHttpResponse } from './chrome-http.js'
+import * as sentinel from './sentinel-client.js'
+import { createFingerprintSession } from './browser-fingerprint.js'
 import { CookieJar } from './cookie-jar.js'
-import { finishChatGptOAuth, rotateTotpInAuthenticatedSession, rotateTotpWithSessionReset, startChatGptLogin } from './openai-protocol-auth.js'
+import { finishChatGptOAuth, rotateTotpInAuthenticatedSession, rotateTotpWithSentinel, rotateTotpWithSessionReset, startChatGptLogin } from './openai-protocol-auth.js'
 import { ManualActionRequiredError } from './openai-auth-errors.js'
 import type { TotpRotationStep } from '../shared/types.js'
 
@@ -128,6 +131,77 @@ describe('ChatGPT login continuation', () => {
     const completed = await finishChatGptOAuth(client, 'https://auth.openai.com/workspace', {}, {}, {})
     expect(completed.url).toBe('https://chatgpt.com/')
     expect(selectedId).toBe('selected-workspace')
+  })
+})
+
+describe('2FA rotation sign-in', () => {
+  it.each(['signed_in', 'email_verification', 'wrong_account'] as const)('starts with the standalone OAuth login before ChatGPT reports %s', async (outcome) => {
+    const email = 'owner@example.com'
+    const authUrl = 'https://auth.openai.com/authorize?state=test-state'
+    const chatGptAuthUrl = 'https://auth.openai.com/authorize?state=chatgpt-state'
+    const consentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent'
+    const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
+    const logout = vi.fn()
+    const stageSecret = vi.fn()
+    const saveSecret = vi.fn(() => newSecret)
+    const oauthJars = new Set<CookieJar>()
+    const generateUrl = vi.fn(async () => authUrl)
+    vi.spyOn(sentinel, 'buildSentinelHeaders').mockResolvedValue({ token: 'test-sentinel' })
+    const request = vi.spyOn(http, 'chromeRequest').mockImplementation(async (cookies, url) => {
+      if (url === authUrl) {
+        expect(oauthJars.has(cookies)).toBe(false)
+        oauthJars.add(cookies)
+        return authResponse(200, {})
+      }
+      if (url.endsWith('/authorize/continue')) return authResponse(200, { page: { type: 'login_password' } })
+      if (url.endsWith('/password/verify')) return authResponse(200, { continue_url: '/mfa-challenge/test-factor' })
+      if (url.endsWith('/mfa/verify')) {
+        cookies.applySetCookie('test-openai-session=active; Secure; Path=/', url)
+        return authResponse(200, { continue_url: consentUrl })
+      }
+      if (url.endsWith('/api/auth/csrf')) return authResponse(200, { csrfToken: 'csrf-secret' })
+      if (url.endsWith('/api/auth/signin/openai')) return authResponse(200, { url: chatGptAuthUrl })
+      if (url === chatGptAuthUrl) {
+        expect(oauthJars.has(cookies)).toBe(true)
+        expect(cookies.header(url)).toContain('test-openai-session=active')
+        const location = outcome === 'email_verification' ? 'https://auth.openai.com/email-verification' : 'https://chatgpt.com/'
+        return authResponse(302, {}, { location })
+      }
+      if (url.endsWith('/api/auth/session')) {
+        return authResponse(200, { accessToken: 'chatgpt-test-token', user: { email: outcome === 'wrong_account' ? 'other@example.com' : email } })
+      }
+      if (url.endsWith('/accounts/mfa_info')) {
+        const id = stageSecret.mock.calls.length ? 'new-factor' : 'old-factor'
+        return authResponse(200, { mfa_enabled_v2: true, factors: { totp: [{ id }] } })
+      }
+      if (url.endsWith('/accounts/mfa/enroll')) return authResponse(200, { session_id: 'new-enrollment', secret: newSecret })
+      if (url.endsWith('/accounts/logout_all')) logout()
+      return authResponse(200, {})
+    })
+
+    try {
+      const rotate = rotateTotpWithSentinel({
+        email, password: 'test-password', totpSecret: 'JBSWY3DPEHPK3PXP', getAuthUrl: generateUrl,
+        session: createFingerprintSession(email, null, 'macOS'), stageSecret, saveSecret
+      })
+      if (outcome === 'signed_in') {
+        await expect(rotate).resolves.toBeUndefined()
+        expect(stageSecret).toHaveBeenCalledWith(newSecret)
+        expect(saveSecret).toHaveBeenCalledOnce()
+        expect(logout).toHaveBeenCalledOnce()
+        expect(generateUrl).toHaveBeenCalledTimes(2)
+        expect(logout.mock.invocationCallOrder[0]).toBeLessThan(generateUrl.mock.invocationCallOrder[1]!)
+      } else {
+        const code = outcome === 'email_verification' ? 'EMAIL_VERIFICATION_REQUIRED' : 'CHATGPT_ACCOUNT_MISMATCH'
+        await expect(rotate).rejects.toMatchObject({ code })
+        expect(request.mock.calls.some(([, url]) => url.startsWith('https://chatgpt.com/backend-api/'))).toBe(false)
+        expect(saveSecret).not.toHaveBeenCalled()
+      }
+      expect(request.mock.calls.filter(([, url]) => url.endsWith('/password/verify'))).toHaveLength(oauthJars.size)
+      expect(request.mock.calls.some(([, url]) => url.endsWith('/workspace/select'))).toBe(false)
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 })
 
