@@ -225,7 +225,7 @@
 
     <ModalDialog v-model:open="authOpen" :title="authMode === 'rotate_totp' ? '更换 2FA 并导入 Sub2API' : '自动授权'" width="max-w-4xl">
       <form class="config-form space-y-6" @submit.prevent="queueAuthorization">
-        <p v-if="authMode === 'rotate_totp'" class="text-sm leading-6 text-slate-600">确认后将更换并保存新 2FA，退出所有设备，再重新登录并按此配置导入 Sub2API。</p>
+        <p v-if="authMode === 'rotate_totp'" class="text-sm leading-6 text-slate-600">确认后将更换并保存新 2FA。仅有当前登录设备时直接按此配置授权并导入 Sub2API；存在多个设备或无法确认设备数量时，先退出所有设备并重新登录，再授权导入。</p>
         <div><label class="label" for="sub2apiAccountName">Sub2API 账号名称</label><input id="sub2apiAccountName" v-model="authSub2apiName" class="input" maxlength="200" required /></div>
 
         <fieldset class="rounded-md border border-slate-200 p-4">

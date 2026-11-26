@@ -9,8 +9,8 @@ const account: Parameters<typeof totpRotationProgress>[0] = {
 describe('2FA operation step display', () => {
   it('marks only earlier steps complete while a step is running', () => {
     const progress = totpRotationProgress(account)!
-    expect(progress.summary).toBe('步骤 5/6 · 重新登录：进行中')
-    expect(progress.steps.map((step) => step.label)).toEqual(['登录账号', '更换并确认 2FA', '保存新密钥', '退出所有设备', '重新登录', '授权并导入 Sub2API'])
+    expect(progress.summary).toBe('步骤 5/6 · 按需重新登录：进行中')
+    expect(progress.steps.map((step) => step.label)).toEqual(['登录账号', '更换并确认 2FA', '保存新密钥', '检查设备，按需全部退出', '按需重新登录', '授权并导入 Sub2API'])
     expect(progress.steps.map((step) => step.status)).toEqual(['completed', 'completed', 'completed', 'completed', 'running', 'pending'])
   })
 

@@ -757,6 +757,14 @@ export async function rotateTotpWithSessionReset(
     loginSecret = input.saveSecret()
   }
   input.onStep?.('logout_devices')
+  const activeSessions = await session.api('/accounts/sessions').catch(() => null)
+  const sessionInfo = asRecord(activeSessions?.json)
+  const devices = sessionInfo.devices
+  // A single listed device is this authenticated session; keep it for the import.
+  if (activeSessions?.status === 200 && sessionInfo.show_session_manager !== false &&
+    Array.isArray(devices) && devices.length === 1 &&
+    devices[0] !== null && typeof devices[0] === 'object' && !Array.isArray(devices[0])) return
+  // If the device list is unavailable, retain the existing logout-and-login flow.
   // Matches ChatGPT's Security > Active sessions action, including the current session.
   const loggedOut = await session.api('/accounts/logout_all', undefined, 'POST')
   if (loggedOut.status < 200 || loggedOut.status >= 300) {

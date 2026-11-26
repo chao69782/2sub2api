@@ -182,6 +182,9 @@ describe('password login from the inbox page', () => {
       if (url === 'https://chatgpt.com/api/auth/session') {
         return authResponse(200, { accessToken: 'test-web-token', user: { email } })
       }
+      if (url.endsWith('/accounts/sessions')) {
+        return authResponse(200, { devices: [{ session_id: 'current' }, { session_id: 'other' }] })
+      }
       if (url.endsWith('/accounts/logout_all')) {
         events.push('logout')
         return authResponse(204, {})
@@ -214,13 +217,14 @@ describe('2FA rotation with device logout', () => {
   const oldSecret = 'JBSWY3DPEHPK3PXP'
   const newSecret = 'JBSWY3DPEHPK3PXPJBSWY3DP'
 
-  function rotationSession(events: string[], logoutStatus = 200) {
+  function rotationSession(events: string[], logoutStatus = 200, devices: unknown[] = [{ session_id: 'current' }, { session_id: 'other' }]) {
     const responses = [
       { status: 200, json: { factors: { totp: [{ id: 'old-factor' }] } } },
       { status: 200, json: {} },
       { status: 200, json: { session_id: 'new-session', secret: newSecret } },
       { status: 200, json: {} },
       { status: 200, json: { mfa_enabled_v2: true, factors: { totp: [{ id: 'new-factor' }] } } },
+      { status: 200, json: { devices } },
       { status: logoutStatus, json: {} }
     ]
     return {
@@ -246,8 +250,60 @@ describe('2FA rotation with device logout', () => {
     expect(fresh.api).not.toHaveBeenCalled()
     expect(events).toEqual([
       'login', '/accounts/mfa_info', '/accounts/mfa/user/disable_in_house', '/accounts/mfa/enroll',
-      'stage', '/accounts/mfa/user/activate_enrollment', '/accounts/mfa_info', 'save', '/accounts/logout_all', 'login'
+      'stage', '/accounts/mfa/user/activate_enrollment', '/accounts/mfa_info', 'save', '/accounts/sessions', '/accounts/logout_all', 'login'
     ])
+  })
+
+  it('saves the confirmed new secret and skips logout and re-login when only one device is listed', async () => {
+    const events: string[] = []
+    const session = rotationSession(events, 200, [{ session_id: 'only-device' }])
+    const login = vi.fn(async () => session)
+    const progress: TotpRotationStep[] = []
+    const saveSecret = vi.fn(() => { events.push('save'); return newSecret })
+    await rotateTotpWithSessionReset({
+      totpSecret: oldSecret, stageSecret: vi.fn(), saveSecret, onStep: (step) => progress.push(step)
+    }, login)
+    expect(saveSecret).toHaveBeenCalledTimes(1)
+    expect(events.indexOf('save')).toBeLessThan(events.indexOf('/accounts/sessions'))
+    expect(session.api).toHaveBeenLastCalledWith('/accounts/sessions')
+    expect(session.api.mock.calls.some(([path]) => path === '/accounts/logout_all')).toBe(false)
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(progress).toEqual(['login', 'rotate_totp', 'save_secret', 'logout_devices'])
+  })
+
+  it('also skips the session reset when resuming a saved secret with a single device', async () => {
+    const api = vi.fn(async () => ({ status: 200, json: { devices: [{}] } }))
+    const login = vi.fn(async () => ({ mfaVerified: true, api }))
+    const stageSecret = vi.fn()
+    const saveSecret = vi.fn(() => newSecret)
+    await rotateTotpWithSessionReset({ totpSecret: newSecret, secretSaved: true, stageSecret, saveSecret }, login)
+    expect(api).toHaveBeenCalledExactlyOnceWith('/accounts/sessions')
+    expect(login).toHaveBeenCalledTimes(1)
+    expect(stageSecret).not.toHaveBeenCalled()
+    expect(saveSecret).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { name: 'empty list', status: 200, json: { devices: [] } },
+    { name: 'missing list', status: 200, json: {} },
+    { name: 'invalid list', status: 200, json: { devices: {} } },
+    { name: 'invalid device', status: 200, json: { devices: [null] } },
+    { name: 'disabled manager', status: 200, json: { devices: [{}], show_session_manager: false } },
+    { name: 'HTTP failure', status: 403, json: { devices: [{}] } },
+    { name: 'network failure', status: 0, json: {} }
+  ])('retains logout and re-login for $name', async ({ status, json }) => {
+    const api = vi.fn(async (path: string) => {
+      if (path === '/accounts/sessions') {
+        if (!status) throw new Error('network unavailable')
+        return { status, json }
+      }
+      return { status: 204, json: {} }
+    })
+    const login = vi.fn(async () => ({ mfaVerified: true, api }))
+    await rotateTotpWithSessionReset({ totpSecret: newSecret, secretSaved: true, stageSecret: vi.fn(), saveSecret: vi.fn() }, login)
+    expect(api).toHaveBeenNthCalledWith(1, '/accounts/sessions')
+    expect(api).toHaveBeenNthCalledWith(2, '/accounts/logout_all', undefined, 'POST')
+    expect(login).toHaveBeenCalledTimes(2)
   })
 
   it.each([302, 401, 403, 500])('keeps the saved secret and stops before re-login when logout returns HTTP %s', async (status) => {
@@ -284,7 +340,8 @@ describe('2FA rotation with device logout', () => {
     const saveSecret = vi.fn(() => newSecret)
     await rotateTotpWithSessionReset({ totpSecret: oldSecret, pendingTotpSecret: newSecret, stageSecret, saveSecret }, login)
     expect(login.mock.calls).toEqual([[newSecret], [newSecret]])
-    expect(staleApi).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    expect(staleApi).toHaveBeenNthCalledWith(1, '/accounts/sessions')
+    expect(staleApi).toHaveBeenNthCalledWith(2, '/accounts/logout_all', undefined, 'POST')
     expect(freshApi).not.toHaveBeenCalled()
     expect(stageSecret).not.toHaveBeenCalled()
     expect(saveSecret).toHaveBeenCalledTimes(1)
@@ -317,7 +374,8 @@ describe('2FA rotation with device logout', () => {
     const saveSecret = vi.fn(() => newSecret)
     await rotateTotpWithSessionReset({ totpSecret: newSecret, secretSaved: true, stageSecret, saveSecret }, login)
     expect(login.mock.calls).toEqual([[newSecret], [newSecret]])
-    expect(api).toHaveBeenCalledExactlyOnceWith('/accounts/logout_all', undefined, 'POST')
+    expect(api).toHaveBeenNthCalledWith(1, '/accounts/sessions')
+    expect(api).toHaveBeenNthCalledWith(2, '/accounts/logout_all', undefined, 'POST')
     expect(stageSecret).not.toHaveBeenCalled()
     expect(saveSecret).not.toHaveBeenCalled()
   })
