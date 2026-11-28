@@ -1,491 +1,840 @@
 <template>
-  <section class="accounts-page">
-    <div class="page-heading">
+  <section class="space-y-6">
+    <!-- Page Header -->
+    <header class="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h1>账号管理</h1>
-        <p class="page-description">管理授权、凭据与 Sub2API 同步</p>
+        <h1 class="text-2xl font-semibold tracking-tight text-ink-primary sm:text-[26px]">账号工作台</h1>
+        <p class="mt-1 text-sm text-ink-muted">集中管理 OpenAI 凭据、自动授权、2FA 轮换与 Sub2API 同步状态</p>
       </div>
-      <div class="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
-        <button class="button button-primary" @click="openImport"><Plus :size="18" />添加账号</button>
-        <button class="icon-button" title="刷新列表" aria-label="刷新列表" :disabled="loading" @click="load"><RefreshCw :size="18" :class="{ 'animate-spin': loading }" /></button>
+      <div class="flex items-center gap-2.5">
+        <button
+          type="button"
+          class="btn"
+          title="手动刷新列表"
+          :disabled="loading"
+          @click="load"
+        >
+          <RefreshCw :size="15" :class="{ 'animate-spin': loading }" />
+          <span class="hidden sm:inline">刷新</span>
+        </button>
+        <button type="button" class="btn btn-primary" @click="importOpen = true">
+          <Plus :size="16" />
+          <span>添加账号</span>
+        </button>
       </div>
-    </div>
+    </header>
 
-    <div v-if="message" class="notice notice-success" role="status">{{ message }}</div>
-    <div v-if="error" class="notice notice-error" role="alert">{{ error }}</div>
+    <!-- Bento Usage Dashboard -->
+    <UsageBento :summary="usageSummary" :loading="loading" />
 
-    <section class="panel usage-overview" aria-labelledby="usage-summary-title">
-      <div class="usage-overview-header">
-        <div>
-          <h2 id="usage-summary-title" class="text-slate-900">用量与可用时间</h2>
-          <p class="mt-1 text-xs leading-5 text-slate-500">已查询账号的平均占用</p>
-        </div>
-        <span v-if="usageSummary" class="usage-count">纳入统计 <span class="metric-meta">{{ usageSummary.eligibleAccountCount }} / {{ usageSummary.accountCount }}</span> 个账号</span>
-      </div>
-      <div v-if="usageSummary" class="usage-grid">
-        <div v-for="window in usageWindows" :key="window.label" class="usage-metric">
-          <span class="text-sm font-medium text-slate-700">{{ window.label }}</span>
-          <p class="usage-value">{{ averageUsageLabel(window.averagePercent) }}</p>
-          <p class="text-xs text-slate-500">已查询 {{ window.queriedCount }} / {{ usageSummary.eligibleAccountCount }} 个账号</p>
-        </div>
-        <div class="availability-metric" :data-status="availability?.status">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="flex items-center gap-2 text-sm font-medium text-slate-700"><Clock3 :size="18" aria-hidden="true" />预计剩余可用时间</div>
-            <span class="text-xs text-slate-500">{{ availabilityWindowLabel }}</span>
+    <!-- Accounts Main Surface -->
+    <div class="surface-card overflow-hidden">
+      <!-- Toolbar -->
+      <div class="space-y-3.5 border-b border-line-subtle p-4 sm:p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5">
+            <h2 class="text-sm font-semibold text-ink-primary">账号列表</h2>
+            <span class="rounded-full bg-subtle px-2 py-0.5 font-mono text-xs text-ink-secondary">{{ total }}</span>
+            <span v-if="hasListFilter" class="text-xs text-ink-muted">· 已应用筛选</span>
           </div>
-          <p class="availability-value">{{ availabilityPrimaryLabel }}</p>
-          <p class="mt-2 text-xs leading-5 text-slate-500">{{ availabilityDetail }}</p>
-          <p class="mt-2 text-xs font-medium leading-5 text-slate-600">{{ availabilityRateLabel }}</p>
-        </div>
-      </div>
-      <p v-else class="text-sm text-slate-500">{{ loading ? '正在加载用量统计…' : '用量统计暂不可用' }}</p>
-    </section>
 
-    <div class="panel account-list">
-      <div class="account-list-heading">
-        <h2>账号列表 <span class="list-count">{{ total }}</span></h2>
-        <span class="text-xs text-slate-500">{{ selectedIds.length ? `已选择 ${selectedIds.length} 个账号` : hasListFilter ? '已应用筛选' : '全部账号' }}</span>
-      </div>
-      <div class="account-toolbar" :class="{ 'has-selection': selectedIds.length > 0 }">
-        <div class="account-search relative">
-          <Search class="pointer-events-none absolute left-3 top-3.5 text-slate-400" :size="18" />
-          <input v-model="search" class="input pl-9" aria-label="搜索邮箱" placeholder="搜索邮箱" @input="debouncedLoad" />
+          <!-- Search Box -->
+          <div class="relative w-full sm:w-72">
+            <Search
+              class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted"
+              :size="15"
+              aria-hidden="true"
+            />
+            <input
+              v-model="search"
+              class="field-input h-9 pl-9 pr-8 text-xs"
+              aria-label="搜索邮箱"
+              placeholder="搜索邮箱地址…"
+              @input="debouncedLoad"
+            />
+            <button
+              v-if="search"
+              type="button"
+              class="icon-btn absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-ink-muted"
+              aria-label="清空搜索"
+              @click="clearSearch"
+            >
+              <X :size="13" />
+            </button>
+          </div>
         </div>
-        <select v-model="healthStatusFilter" class="input account-status-filter" aria-label="按账号状态筛选" @change="resetPageAndLoad">
-          <option value="">全部状态</option>
-          <option value="healthy">健康</option>
-          <option value="unknown">未知</option>
-          <option value="degraded">异常</option>
-          <option value="rate_limited">限流</option>
-          <option value="invalid_credentials">凭据失效</option>
-          <option value="upstream_blocked">上游阻止</option>
-          <option value="network_error">网络错误</option>
-        </select>
-        <div class="account-batch-actions">
-          <button v-if="selectedIds.length" class="button button-quiet" type="button" @click="selectedIds = []">清空选择</button>
-          <button class="button" title="导出选中的账号---密码---2FA" :disabled="!selectedIds.length" @click="api.exportAccounts(selectedIds)"><Download :size="18" />导出选中<span v-if="selectedIds.length" class="metric-meta">{{ selectedIds.length }}</span></button>
+
+        <!-- Status Quick Filter Pills -->
+        <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="按健康状态筛选">
+          <button
+            v-for="pill in statusFilterPills"
+            :key="pill.value"
+            type="button"
+            class="h-7 rounded-full border px-3 text-xs font-medium transition-colors"
+            :class="
+              healthStatusFilter === pill.value
+                ? 'border-accent bg-accent-soft text-accent'
+                : 'border-line-subtle bg-transparent text-ink-secondary hover:bg-subtle hover:text-ink-primary'
+            "
+            @click="selectHealthFilter(pill.value)"
+          >
+            {{ pill.label }}
+          </button>
         </div>
       </div>
-      <div v-if="loading" class="flex h-48 items-center justify-center text-slate-500"><LoaderCircle class="animate-spin" :size="18" /></div>
-      <div v-else-if="!accounts.length" class="account-empty">
-        <Users :size="18" aria-hidden="true" />
-        <h3>{{ hasListFilter ? '没有符合条件的账号' : '添加第一个账号' }}</h3>
-        <p>{{ hasListFilter ? '试试其他邮箱或账号状态' : '导入邮箱、密码和 2FA 密钥，开始管理账号授权' }}</p>
+
+      <!-- Loading State -->
+      <div v-if="loading && !accounts.length" class="flex h-56 flex-col items-center justify-center gap-3 text-ink-muted">
+        <LoaderCircle class="animate-spin text-accent" :size="22" />
+        <span class="text-xs">正在加载账号数据…</span>
       </div>
-      <div v-else>
-        <div class="divide-y divide-slate-200 md:hidden">
-          <article v-for="account in accounts" :key="account.id" class="account-card space-y-4" :class="{ 'is-selected': selectedIds.includes(account.id) }">
-            <div class="min-w-0">
-              <div class="flex items-center gap-2"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /><div class="truncate font-medium" :title="account.email">{{ account.email }}</div></div>
-              <div class="mt-1 truncate text-sm text-slate-700" :title="account.sub2apiAccountName || ''">Sub2API：{{ account.sub2apiAccountName || '未设置' }}</div>
-              <TotpRotationProgress v-if="account.totpRotationStatus" :account="account" :fallback-label="totpRotationLabel(account)" />
+
+      <!-- Empty State -->
+      <div v-else-if="!accounts.length" class="flex min-h-[260px] flex-col items-center justify-center gap-3 p-8 text-center">
+        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-subtle text-ink-muted">
+          <Users :size="22" aria-hidden="true" />
+        </div>
+        <div>
+          <h3 class="text-sm font-semibold text-ink-primary">
+            {{ hasListFilter ? '没有符合筛选条件的账号' : '还没有任何账号' }}
+          </h3>
+          <p class="mt-1 max-w-xs text-xs leading-5 text-ink-muted">
+            {{ hasListFilter ? '尝试更换搜索关键词或清除状态筛选条件' : '导入邮箱、密码与 2FA 密钥，立即开始自动化授权与调度管理' }}
+          </p>
+        </div>
+        <button v-if="hasListFilter" type="button" class="btn btn-sm mt-1" @click="resetFilters">清除筛选</button>
+        <button v-else type="button" class="btn btn-primary btn-sm mt-1" @click="importOpen = true">
+          <Plus :size="14" />添加第一个账号
+        </button>
+      </div>
+
+      <!-- Account List Content -->
+      <template v-else>
+        <!-- Mobile Card List -->
+        <div class="divide-y divide-line-subtle lg:hidden">
+          <article
+            v-for="account in accounts"
+            :key="account.id"
+            class="space-y-3.5 p-4 transition-colors"
+            :class="{ 'bg-accent-soft/40': selectedIds.includes(account.id) }"
+          >
+            <div class="flex items-start gap-3">
+              <input
+                v-model="selectedIds"
+                type="checkbox"
+                class="mt-1"
+                :value="account.id"
+                :aria-label="`选择 ${account.email}`"
+              />
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-medium text-ink-primary" :title="account.email">
+                  {{ account.email }}
+                </div>
+                <div class="mt-0.5 truncate font-mono text-xs text-ink-muted">
+                  Sub2API：{{ account.sub2apiAccountName || '未设置' }}
+                </div>
+                <TotpRotationProgress
+                  v-if="account.totpRotationStatus"
+                  :account="account"
+                  :fallback-label="totpRotationLabel(account)"
+                  compact
+                  @inspect="openRotationDrawer(account)"
+                />
+              </div>
+              <StatusBadge :value="displayHealthStatus(account)" />
             </div>
-            <dl class="grid grid-cols-3 gap-2 text-xs">
-              <div><dt class="mb-1 text-slate-500">自动重授权次数</dt><dd>{{ account.autoReauthorizationCount }}</dd></div>
-              <div><dt class="mb-1 text-slate-500">健康</dt><dd class="flex flex-col items-start gap-1"><StatusBadge :value="displayHealthStatus(account)" /><span v-if="isSchedulingPaused(account)" class="badge bg-amber-50 text-amber-800">已暂停调度</span></dd></div>
-              <div><dt class="mb-1 text-slate-500">同步</dt><dd><StatusBadge :value="account.syncStatus" /></dd></div>
-            </dl>
-            <div class="rounded-md bg-slate-50 px-3 py-2 text-xs">
-              <div class="mb-1.5 text-slate-500">用量窗口</div>
-              <div v-if="account.usageFiveHourPercent !== null || account.usageSevenDayPercent !== null" class="space-y-1.5 text-slate-600">
-                <div v-for="item in [{ label: '5h', value: account.usageFiveHourPercent }, { label: '7d', value: account.usageSevenDayPercent }]" :key="item.label" class="flex items-center gap-2">
-                  <span class="w-5 shrink-0">{{ item.label }}</span><div class="h-1.5 flex-1 rounded-full bg-slate-200"><div class="h-1.5 rounded-full bg-emerald-500" :style="{ width: usageWidth(item.value) }" /></div><span class="w-9 text-right">{{ usageLabel(item.value) }}</span>
+
+            <!-- Status & Metrics Strip -->
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+              <StatusBadge :value="account.syncStatus" />
+              <span
+                v-if="isSchedulingPaused(account)"
+                class="pill-badge"
+                style="background-color: var(--status-warn-bg); color: var(--status-warn)"
+              >
+                已暂停调度
+              </span>
+              <span class="ml-auto font-mono text-[11px] text-ink-muted">
+                重授权 {{ account.autoReauthorizationCount }} 次
+              </span>
+            </div>
+
+            <!-- Usage Bars -->
+            <div class="rounded-control bg-subtle/60 px-3 py-2.5 text-xs">
+              <div
+                v-if="account.usageFiveHourPercent !== null || account.usageSevenDayPercent !== null"
+                class="space-y-2"
+              >
+                <div
+                  v-for="item in usageItems(account)"
+                  :key="item.label"
+                  class="flex items-center gap-2.5"
+                >
+                  <span class="w-6 shrink-0 font-mono text-[11px] text-ink-muted">{{ item.label }}</span>
+                  <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface">
+                    <div
+                      class="h-full rounded-full"
+                      :style="{ width: usageWidth(item.value), backgroundColor: usageBarColor(item.value) }"
+                    ></div>
+                  </div>
+                  <span class="w-9 text-right font-mono text-[11px] text-ink-secondary">{{ usageLabel(item.value) }}</span>
                 </div>
               </div>
-              <span v-else class="text-slate-400">未查询</span>
+              <span v-else class="text-ink-muted">用量窗口暂未查询</span>
             </div>
-            <div class="rounded-md bg-slate-50 px-3 py-2 text-xs" :class="authorizationResult(account).tone">
-              <div class="font-medium">授权结果：{{ authorizationResult(account).label }}</div>
-              <div class="mt-1 break-words text-slate-600">{{ authorizationResult(account).detail }}</div>
+
+            <!-- Authorization Result -->
+            <div class="flex items-start justify-between gap-2 text-xs">
+              <div class="min-w-0">
+                <span class="font-medium" :style="{ color: authorizationResult(account).color }">
+                  授权{{ authorizationResult(account).label }}
+                </span>
+                <span class="ml-1.5 break-words text-ink-muted">{{ authorizationResult(account).detail }}</span>
+              </div>
+              <span class="shrink-0 font-mono text-[11px] text-ink-muted">{{ formatTime(account.lastCheckAt) }}</span>
             </div>
-            <div class="text-xs text-slate-500">最近检查：{{ formatTime(account.lastCheckAt) }}</div>
-            <div class="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-              <button class="button account-authorize" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="18" /><span>授权</span></button>
-              <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
-                <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="18" /><Play v-else-if="isSchedulingPaused(account)" :size="18" /><Pause v-else :size="18" />
+
+            <!-- Mobile Action Bar -->
+            <div class="flex items-center gap-1.5 border-t border-line-subtle pt-3">
+              <button
+                type="button"
+                class="btn btn-sm h-10 flex-1"
+                @click="openAuthorization(account, 'authorize')"
+              >
+                <Bot :size="15" /><span>授权</span>
               </button>
-              <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="18" /></button>
-              <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="18" /></button>
-              <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="18" /></button>
+              <button
+                type="button"
+                class="icon-btn h-10 w-10"
+                :title="schedulingActionLabel(account)"
+                :aria-label="schedulingActionLabel(account)"
+                :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)"
+                @click="toggleScheduling(account)"
+              >
+                <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="16" />
+                <Play v-else-if="isSchedulingPaused(account)" :size="16" />
+                <Pause v-else :size="16" />
+              </button>
+              <button
+                type="button"
+                class="icon-btn h-10 w-10"
+                title="更换 2FA 并导入 Sub2API"
+                aria-label="更换 2FA 并导入 Sub2API"
+                :disabled="rotationInProgress(account)"
+                @click="openAuthorization(account, 'rotate_totp')"
+              >
+                <KeyRound :size="16" />
+              </button>
+              <button
+                type="button"
+                class="icon-btn h-10 w-10"
+                title="查看安全凭据"
+                aria-label="查看安全凭据"
+                @click="openCredentials(account)"
+              >
+                <Eye :size="16" />
+              </button>
+              <button
+                type="button"
+                class="icon-btn icon-btn-danger h-10 w-10"
+                title="删除账号"
+                aria-label="删除账号"
+                @click="askDelete(account)"
+              >
+                <Trash2 :size="16" />
+              </button>
             </div>
           </article>
         </div>
-        <div class="hidden overflow-x-auto md:block">
-        <table class="accounts-table min-w-[1280px] w-full table-fixed text-left text-sm">
-          <thead class="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
-            <tr>
-              <th class="w-[44px] px-4 py-3"><input type="checkbox" :checked="allSelected" aria-label="全选账号" @change="toggleAll" /></th>
-              <th class="w-[208px] px-4 py-3">邮箱</th>
-              <th class="w-[128px] px-4 py-3">Sub2API 名称</th>
-              <th class="w-[144px] px-3 py-3">授权结果</th>
-              <th class="w-[68px] px-3 py-3 text-center"><span class="block">重授权</span><span class="block">次数</span></th>
-              <th class="w-[128px] px-3 py-3">用量窗口</th>
-              <th class="w-[100px] px-2 py-3 text-center">健康</th>
-              <th class="w-[84px] px-4 py-3 text-center">同步</th>
-              <th class="w-[132px] px-4 py-3">最近检查</th>
-              <th class="sticky right-0 z-20 w-[248px] border-l border-slate-200 bg-slate-50 px-4 py-3 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr v-for="account in accounts" :key="account.id" class="group align-middle hover:bg-slate-50" :class="{ 'is-selected': selectedIds.includes(account.id) }">
-              <td class="px-4 py-3"><input v-model="selectedIds" type="checkbox" :value="account.id" :aria-label="`选择 ${account.email}`" /></td>
-              <td class="px-4 py-3 font-medium"><div class="truncate" :title="account.email">{{ account.email }}</div><TotpRotationProgress v-if="account.totpRotationStatus" :account="account" :fallback-label="totpRotationLabel(account)" /></td>
-              <td class="truncate px-4 py-3 text-slate-700" :title="account.sub2apiAccountName || ''">{{ account.sub2apiAccountName || '-' }}</td>
-              <td class="px-4 py-3" :title="authorizationResult(account).title">
-                <div class="font-medium" :class="authorizationResult(account).tone">{{ authorizationResult(account).label }}</div>
-                <div class="mt-0.5 line-clamp-2 break-words text-xs leading-5 text-slate-500">{{ authorizationResult(account).detail }}</div>
-              </td>
-              <td class="px-3 py-3 text-center text-slate-600">{{ account.autoReauthorizationCount }}</td>
-              <td class="px-3 py-3">
-                <div v-if="account.usageFiveHourPercent !== null || account.usageSevenDayPercent !== null" class="space-y-1.5 text-xs text-slate-600">
-                  <div v-for="item in [{ label: '5h', value: account.usageFiveHourPercent }, { label: '7d', value: account.usageSevenDayPercent }]" :key="item.label" class="flex items-center gap-1.5">
-                    <span class="w-5 shrink-0">{{ item.label }}</span><div class="h-1.5 min-w-12 flex-1 rounded-full bg-slate-200"><div class="h-1.5 rounded-full bg-emerald-500" :style="{ width: usageWidth(item.value) }" /></div><span class="w-9 text-right">{{ usageLabel(item.value) }}</span>
+
+        <!-- Desktop Precision Table -->
+        <div class="hidden overflow-x-auto lg:block">
+          <table class="w-full min-w-[980px] text-left text-sm">
+            <thead class="border-b border-line-subtle bg-subtle/50 text-xs font-medium text-ink-muted">
+              <tr>
+                <th class="w-11 px-4 py-3">
+                  <input type="checkbox" :checked="allSelected" aria-label="全选当前页账号" @change="toggleAll" />
+                </th>
+                <th class="min-w-[230px] px-3 py-3">账号 / Sub2API</th>
+                <th class="w-[140px] px-3 py-3">健康与调度</th>
+                <th class="w-[156px] px-3 py-3">用量窗口</th>
+                <th class="min-w-[170px] px-3 py-3">授权与同步</th>
+                <th class="w-[126px] px-3 py-3">最近检查</th>
+                <th class="w-[216px] px-4 py-3 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-line-subtle">
+              <tr
+                v-for="account in accounts"
+                :key="account.id"
+                class="transition-colors hover:bg-subtle/45"
+                :class="{ 'bg-accent-soft/45 hover:bg-accent-soft/60': selectedIds.includes(account.id) }"
+              >
+                <!-- Select -->
+                <td class="px-4 py-3.5 align-middle">
+                  <input
+                    v-model="selectedIds"
+                    type="checkbox"
+                    :value="account.id"
+                    :aria-label="`选择 ${account.email}`"
+                  />
+                </td>
+
+                <!-- Identity -->
+                <td class="px-3 py-3.5 align-middle">
+                  <div class="max-w-[260px] truncate font-medium text-ink-primary" :title="account.email">
+                    {{ account.email }}
                   </div>
-                </div>
-                <span v-else class="text-xs text-slate-400">未查询</span>
-              </td>
-              <td class="px-2 py-3 align-middle text-center">
-                <div class="flex min-w-0 flex-col items-center justify-center">
-                  <StatusBadge :value="displayHealthStatus(account)" />
-                  <span v-if="isSchedulingPaused(account)" class="badge mt-1.5 bg-amber-50 text-amber-800">已暂停调度</span>
-                  <div v-if="account.sub2apiStatus?.toLowerCase() === 'error'" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600">Sub2API 账号错误</div>
-                  <div v-else-if="displayHealthStatus(account) !== 'healthy' && account.lastErrorSummary" class="mt-1.5 w-full truncate px-1 text-xs leading-4 text-red-600" :title="account.lastErrorSummary">
-                    {{ shortError(account.lastErrorSummary) }}
+                  <div class="mt-0.5 flex items-center gap-1.5 text-xs text-ink-muted">
+                    <span class="max-w-[200px] truncate font-mono" :title="account.sub2apiAccountName || ''">
+                      {{ account.sub2apiAccountName || '未命名 Sub2API 账号' }}
+                    </span>
                   </div>
-                </div>
-              </td>
-              <td class="px-4 py-3 text-center"><StatusBadge :value="account.syncStatus" /></td>
-              <td class="px-4 py-3 text-slate-500">{{ formatTime(account.lastCheckAt) }}</td>
-              <td class="sticky right-0 z-10 border-l border-slate-200 bg-white px-4 py-3 group-hover:bg-slate-50">
-                <div class="flex justify-end gap-1">
-                  <button class="button account-authorize" title="自动授权或重新授权" aria-label="自动授权或重新授权" @click="openAuthorization(account)"><Bot :size="18" /><span>授权</span></button>
-                  <button class="icon-button" :title="schedulingActionLabel(account)" :aria-label="schedulingActionLabel(account)" :aria-busy="changingSchedulingIds.has(account.id)" :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)" @click="toggleScheduling(account)">
-                    <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="18" /><Play v-else-if="isSchedulingPaused(account)" :size="18" /><Pause v-else :size="18" />
-                  </button>
-                  <button class="icon-button" title="更换 2FA、退出所有设备并导入 Sub2API" aria-label="更换 2FA、退出所有设备并导入 Sub2API" :disabled="rotationInProgress(account)" @click="openAuthorization(account, 'rotate_totp')"><KeyRound :size="18" /></button>
-                  <button class="icon-button" title="查看凭据" aria-label="查看凭据" @click="openCredentials(account)"><Eye :size="18" /></button>
-                  <button class="icon-button text-red-600" title="删除" aria-label="删除" @click="remove(account)"><Trash2 :size="18" /></button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+                  <TotpRotationProgress
+                    v-if="account.totpRotationStatus"
+                    :account="account"
+                    :fallback-label="totpRotationLabel(account)"
+                    compact
+                    @inspect="openRotationDrawer(account)"
+                  />
+                </td>
+
+                <!-- Health & Scheduling -->
+                <td class="px-3 py-3.5 align-middle">
+                  <div class="flex flex-col items-start gap-1.5">
+                    <StatusBadge :value="displayHealthStatus(account)" />
+                    <span
+                      v-if="isSchedulingPaused(account)"
+                      class="pill-badge text-[11px]"
+                      style="background-color: var(--status-warn-bg); color: var(--status-warn)"
+                    >
+                      已暂停调度
+                    </span>
+                    <span
+                      v-if="account.sub2apiStatus?.toLowerCase() === 'error'"
+                      class="max-w-[130px] truncate text-[11px]"
+                      style="color: var(--status-danger)"
+                      title="Sub2API 账号错误"
+                    >
+                      Sub2API 账号错误
+                    </span>
+                    <span
+                      v-else-if="displayHealthStatus(account) !== 'healthy' && account.lastErrorSummary"
+                      class="max-w-[130px] truncate text-[11px]"
+                      style="color: var(--status-danger)"
+                      :title="account.lastErrorSummary"
+                    >
+                      {{ shortError(account.lastErrorSummary) }}
+                    </span>
+                  </div>
+                </td>
+
+                <!-- Usage Bars -->
+                <td class="px-3 py-3.5 align-middle">
+                  <div
+                    v-if="account.usageFiveHourPercent !== null || account.usageSevenDayPercent !== null"
+                    class="space-y-2"
+                  >
+                    <div v-for="item in usageItems(account)" :key="item.label" class="flex items-center gap-2">
+                      <span class="w-5 shrink-0 font-mono text-[11px] text-ink-muted">{{ item.label }}</span>
+                      <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-subtle">
+                        <div
+                          class="h-full rounded-full transition-all duration-300"
+                          :style="{ width: usageWidth(item.value), backgroundColor: usageBarColor(item.value) }"
+                        ></div>
+                      </div>
+                      <span class="w-8 text-right font-mono text-[11px] text-ink-secondary">
+                        {{ usageLabel(item.value) }}
+                      </span>
+                    </div>
+                  </div>
+                  <span v-else class="text-xs text-ink-muted">未查询</span>
+                </td>
+
+                <!-- Auth & Sync -->
+                <td class="px-3 py-3.5 align-middle" :title="authorizationResult(account).title">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <StatusBadge :value="account.syncStatus" />
+                    <span
+                      v-if="account.autoReauthorizationCount > 0"
+                      class="rounded-md bg-subtle px-1.5 py-0.5 font-mono text-[11px] text-ink-muted"
+                      :title="`自动重授权 ${account.autoReauthorizationCount} 次`"
+                    >
+                      ×{{ account.autoReauthorizationCount }}
+                    </span>
+                  </div>
+                  <div class="mt-1.5 flex items-baseline gap-1.5 text-xs">
+                    <span class="shrink-0 font-medium" :style="{ color: authorizationResult(account).color }">
+                      {{ authorizationResult(account).label }}
+                    </span>
+                    <span class="max-w-[160px] truncate text-ink-muted">
+                      {{ authorizationResult(account).detail }}
+                    </span>
+                  </div>
+                </td>
+
+                <!-- Last Check -->
+                <td class="px-3 py-3.5 align-middle font-mono text-xs text-ink-muted">
+                  {{ formatTime(account.lastCheckAt) }}
+                </td>
+
+                <!-- Actions -->
+                <td class="px-4 py-3.5 text-right align-middle">
+                  <div class="inline-flex items-center justify-end gap-1">
+                    <button
+                      type="button"
+                      class="btn btn-sm mr-1"
+                      title="自动授权或重新授权"
+                      @click="openAuthorization(account, 'authorize')"
+                    >
+                      <Bot :size="14" />
+                      <span>授权</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn h-8 w-8"
+                      :title="schedulingActionLabel(account)"
+                      :aria-label="schedulingActionLabel(account)"
+                      :disabled="!account.sub2apiAccountId || changingSchedulingIds.has(account.id)"
+                      @click="toggleScheduling(account)"
+                    >
+                      <LoaderCircle v-if="changingSchedulingIds.has(account.id)" class="animate-spin" :size="15" />
+                      <Play v-else-if="isSchedulingPaused(account)" :size="15" />
+                      <Pause v-else :size="15" />
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn h-8 w-8"
+                      title="更换 2FA、退出设备并导入 Sub2API"
+                      aria-label="更换 2FA、退出设备并导入 Sub2API"
+                      :disabled="rotationInProgress(account)"
+                      @click="openAuthorization(account, 'rotate_totp')"
+                    >
+                      <KeyRound :size="15" />
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn h-8 w-8"
+                      title="查看安全凭据"
+                      aria-label="查看安全凭据"
+                      @click="openCredentials(account)"
+                    >
+                      <Eye :size="15" />
+                    </button>
+                    <button
+                      type="button"
+                      class="icon-btn icon-btn-danger h-8 w-8"
+                      title="删除账号"
+                      aria-label="删除账号"
+                      @click="askDelete(account)"
+                    >
+                      <Trash2 :size="15" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-      </div>
-      <nav v-if="!loading && total > 0" class="account-pagination" aria-label="账号列表分页">
-        <span>显示 {{ pageStart }}–{{ pageEnd }} / {{ total }} 个账号</span>
+      </template>
+
+      <!-- Pagination -->
+      <nav
+        v-if="!loading && total > 0"
+        class="flex flex-wrap items-center justify-between gap-3 border-t border-line-subtle px-4 py-3 text-xs text-ink-muted sm:px-5"
+        aria-label="账号列表分页"
+      >
+        <span class="font-mono">显示 {{ pageStart }}–{{ pageEnd }} / {{ total }}</span>
         <div class="flex flex-wrap items-center gap-2">
-          <label for="account-page-size">每页</label>
-          <select id="account-page-size" v-model.number="pageSize" class="input w-20" @change="resetPageAndLoad"><option :value="20">20</option><option :value="50">50</option><option :value="100">100</option></select>
-          <button class="button" type="button" :disabled="page <= 1" @click="changePage(1)">首页</button>
-          <button class="button" type="button" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button>
-          <span class="whitespace-nowrap tabular-nums">{{ page }} / {{ totalPages }} 页</span>
-          <button class="button" type="button" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button>
-          <button class="button" type="button" :disabled="page >= totalPages" @click="changePage(totalPages)">末页</button>
+          <label class="flex items-center gap-1.5" for="account-page-size">
+            <span>每页</span>
+            <select
+              id="account-page-size"
+              v-model.number="pageSize"
+              class="field-select h-8 w-[72px] px-2 text-xs"
+              @change="resetPageAndLoad"
+            >
+              <option :value="20">20</option>
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+            </select>
+          </label>
+          <div class="inline-flex items-center gap-1">
+            <button type="button" class="btn btn-sm" :disabled="page <= 1" @click="changePage(1)">首页</button>
+            <button type="button" class="btn btn-sm" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button>
+            <span class="px-2 font-mono text-ink-primary">{{ page }} / {{ totalPages }}</span>
+            <button type="button" class="btn btn-sm" :disabled="page >= totalPages" @click="changePage(page + 1)">下一页</button>
+            <button type="button" class="btn btn-sm" :disabled="page >= totalPages" @click="changePage(totalPages)">末页</button>
+          </div>
         </div>
       </nav>
     </div>
 
-    <ModalDialog v-model:open="importOpen" title="添加账号" width="max-w-5xl">
-      <p class="dialog-intro">粘贴账号数据，导入时自动检查格式并跳过重复邮箱</p>
-      <div class="import-layout">
-        <div class="import-editor">
-          <div class="mb-2 flex items-center justify-between gap-2"><label class="label mb-0" for="credentialText">账号数据</label><span class="text-xs text-slate-500">每行一个账号</span></div>
-          <textarea id="credentialText" v-model="credentialText" class="textarea font-mono" spellcheck="false" placeholder="邮箱--密码--2FA密钥" :disabled="importing" @input="previewRows = []; importError = ''"></textarea>
-          <p class="mt-2 text-xs leading-5 text-slate-500">支持连续两个及以上半角 - 作为分隔符</p>
-        </div>
-        <div class="import-results">
-          <div class="mb-2 flex items-center justify-between"><span class="text-sm font-medium">检查结果</span><span class="text-xs text-slate-500">有效 {{ validCount }}</span></div>
-          <div class="import-result-surface" aria-live="polite" :aria-busy="importing">
-            <table v-if="previewRows.length" class="w-full text-left text-sm">
-              <thead class="sticky top-0 bg-slate-50 text-xs text-slate-500"><tr><th class="px-3 py-2">行</th><th class="px-3 py-2">邮箱</th><th class="px-3 py-2">状态</th></tr></thead>
-              <tbody class="divide-y divide-slate-100">
-                <tr v-for="row in previewRows" :key="String(row.line)"><td class="px-3 py-3">{{ row.line }}</td><td class="max-w-48 break-words px-3 py-3" :title="String(row.message)">{{ row.email || row.message }}</td><td class="px-3 py-3"><StatusBadge :value="String(row.status)" /></td></tr>
-              </tbody>
-            </table>
-            <div v-else class="import-result-empty"><ScanSearch :size="18" aria-hidden="true" /><p>{{ importing ? '正在检查账号数据…' : '点击导入后显示检查结果' }}</p></div>
-          </div>
-        </div>
+    <!-- Floating Batch Selection Bar -->
+    <Transition name="fade-scale">
+      <div
+        v-if="selectedIds.length > 0"
+        class="fixed bottom-16 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-full border border-line-strong bg-elevated px-4 py-2 shadow-elevated md:bottom-6"
+        role="region"
+        aria-label="批量操作"
+      >
+        <span class="text-xs font-medium text-ink-primary">
+          已选 <strong class="font-mono text-accent">{{ selectedIds.length }}</strong> 个账号
+        </span>
+        <span class="h-4 w-px bg-line-subtle" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="btn btn-primary btn-sm rounded-full"
+          title="导出选中的账号---密码---2FA"
+          @click="api.exportAccounts(selectedIds)"
+        >
+          <Download :size="14" />
+          <span>导出选中</span>
+        </button>
+        <button type="button" class="btn btn-ghost btn-sm rounded-full" @click="selectedIds = []">
+          清空
+        </button>
       </div>
-      <div v-if="importError" class="notice notice-error mt-4 mb-0" role="alert">{{ importError }}</div>
-      <div class="dialog-footer flex flex-wrap items-center justify-between gap-3">
-        <p class="text-xs leading-5 text-slate-500">有效账号将直接导入，无效行自动跳过</p>
-        <button class="button button-primary" :disabled="!credentialText.trim() || importing" :aria-busy="importing" @click="submitImport"><LoaderCircle v-if="importing" :size="18" class="animate-spin" /><Upload v-else :size="18" />{{ importing ? '导入中…' : '导入' }}</button>
-      </div>
-    </ModalDialog>
+    </Transition>
 
-    <ModalDialog v-model:open="credentialsOpen" title="账号凭据" width="max-w-lg">
-      <div v-if="credentials" class="space-y-4">
-        <div><label class="label" for="credentialEmail">邮箱</label><input id="credentialEmail" class="input" :value="credentials.email" readonly /></div>
-        <div><label class="label" for="credentialPassword">密码</label><input id="credentialPassword" class="input font-mono" :value="credentials.password" readonly autocomplete="off" /></div>
-        <div><label class="label" for="credentialTotp">2FA 密钥</label><input id="credentialTotp" class="input font-mono" :value="credentials.totpSecret" readonly autocomplete="off" /></div>
-        <div class="flex justify-end"><button class="button" type="button" @click="credentialsOpen = false">关闭</button></div>
-      </div>
-    </ModalDialog>
-
-    <ModalDialog v-model:open="authOpen" :title="authMode === 'rotate_totp' ? '更换 2FA 并导入 Sub2API' : '自动授权'" width="max-w-4xl">
-      <form class="config-form space-y-6" @submit.prevent="queueAuthorization">
-        <p v-if="authMode === 'rotate_totp'" class="text-sm leading-6 text-slate-600">确认后将更换并保存新 2FA。仅有当前登录设备时直接按此配置授权并导入 Sub2API；存在多个设备或无法确认设备数量时，先退出所有设备并重新登录，再授权导入。</p>
-        <div><label class="label" for="sub2apiAccountName">Sub2API 账号名称</label><input id="sub2apiAccountName" v-model="authSub2apiName" class="input" maxlength="200" required /></div>
-
-        <fieldset class="rounded-md border border-slate-200 p-4">
-          <legend class="px-1 text-sm font-medium text-slate-800">账号导入配置</legend>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition-colors" :class="authUseGlobal ? 'bg-emerald-50' : 'hover:bg-slate-50'">
-              <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="true" />
-              <span><span class="block text-sm font-medium text-slate-800">使用全局配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">跟随设置页中的导入模板、模型白名单和模型映射</span></span>
-            </label>
-            <label class="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition-colors" :class="!authUseGlobal ? 'bg-emerald-50' : 'hover:bg-slate-50'">
-              <input v-model="authUseGlobal" class="mt-0.5 h-4 w-4 accent-emerald-700" type="radio" name="accountImportProfile" :value="false" />
-              <span><span class="block text-sm font-medium text-slate-800">使用账号专属配置</span><span class="mt-0.5 block text-xs leading-5 text-slate-500">保存到该账号，后续自动重授权继续使用</span></span>
-            </label>
-          </div>
-        </fieldset>
-
-        <div v-if="!authUseGlobal" class="space-y-4">
-          <section class="rounded-md border border-slate-200">
-            <header class="border-b border-slate-200 bg-slate-50 px-4 py-3"><h3 class="text-sm font-medium text-slate-800">Sub2API 导入模板</h3></header>
-            <div class="space-y-4 p-4">
-              <div class="grid gap-4 sm:grid-cols-3">
-                <NumberField v-model="authOverrides.concurrency" label="并发数量" :min="0" :max="1000" />
-                <NumberField v-model="authOverrides.priority" label="优先级" :min="0" :max="100000" />
-                <NullableNumberField v-model="authOverrides.loadFactor" label="负载系数" :min="1" :max="10000" />
-              </div>
-              <label class="flex min-h-10 cursor-pointer items-center gap-3 text-sm"><input v-model="authOverrides.autoPauseOnExpired" type="checkbox" class="h-4 w-4 accent-emerald-700" />账号过期后自动暂停</label>
-              <div class="grid gap-5 lg:grid-cols-2">
-                <fieldset>
-                  <legend class="label">OpenAI 分组</legend>
-                  <div class="max-h-36 overflow-auto rounded-md border border-slate-200 p-2">
-                    <label v-for="group in groups" :key="group.id" class="flex min-h-9 cursor-pointer items-center gap-2 rounded px-2 text-sm hover:bg-slate-50">
-                      <input v-model="authOverrides.groupIds" type="checkbox" :value="group.id" class="h-4 w-4 accent-emerald-700" />
-                      <span>{{ group.name }}</span><span class="ml-auto text-xs text-slate-400">ID {{ group.id }}</span>
-                    </label>
-                    <div v-if="!groups.length" class="px-2 py-3 text-sm text-slate-500">没有可用分组</div>
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend class="label">代理分配</legend>
-                  <div class="flex flex-wrap gap-4 text-sm">
-                    <label class="flex cursor-pointer items-center gap-2"><input v-model="authOverrides.proxyPolicy" type="radio" name="accountProxyPolicy" value="auto" />自动选择</label>
-                    <label class="flex cursor-pointer items-center gap-2"><input v-model="authOverrides.proxyPolicy" type="radio" name="accountProxyPolicy" value="direct" />不使用代理</label>
-                    <label class="flex cursor-pointer items-center gap-2"><input v-model="authOverrides.proxyPolicy" type="radio" name="accountProxyPolicy" value="fixed" />固定代理</label>
-                  </div>
-                  <select v-if="authOverrides.proxyPolicy === 'fixed'" v-model.number="authOverrides.fixedProxyId" class="input mt-3" aria-label="固定代理">
-                    <option :value="null">选择代理</option>
-                    <option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">{{ proxy.name }} · {{ proxy.account_count || 0 }} 个账号</option>
-                  </select>
-                  <p v-else-if="authOverrides.proxyPolicy === 'auto'" class="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">按账号数最少、延迟最低自动选择；没有可用代理时使用直连。</p>
-                </fieldset>
-              </div>
-            </div>
-          </section>
-
-          <section class="rounded-md border border-slate-200 p-4">
-            <label class="label" for="accountModelWhitelist">模型白名单</label>
-            <textarea id="accountModelWhitelist" v-model="authModelWhitelistText" class="textarea min-h-32 font-mono" spellcheck="false" placeholder="每行一个模型 ID，例如：&#10;gpt-5.6-luna&#10;gpt-5.6-sol"></textarea>
-            <p class="mt-2 text-xs leading-5 text-slate-500">仅对该账号生效，每行一个准确的模型 ID，不支持通配符。</p>
-          </section>
-
-          <section class="rounded-md border border-slate-200 p-4" aria-labelledby="accountModelMappingTitle">
-            <div class="mb-3 flex items-center gap-3">
-              <h3 id="accountModelMappingTitle" class="text-sm font-medium text-slate-800">模型映射</h3>
-              <button type="button" class="button ml-auto" @click="authModelRows.push({ source: '', target: '' })"><Plus :size="18" />添加</button>
-            </div>
-            <div v-for="(row, index) in authModelRows" :key="index" class="mb-3 grid grid-cols-[minmax(0,1fr)_44px] gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_44px] sm:gap-3">
-              <label class="min-w-0"><span class="label">客户端模型</span><input v-model="row.source" class="input min-w-0 font-mono" placeholder="客户端模型 ID" spellcheck="false" /></label>
-              <label class="col-start-1 row-start-2 min-w-0 sm:col-start-auto sm:row-start-auto"><span class="label">上游模型</span><input v-model="row.target" class="input min-w-0 font-mono" placeholder="上游模型 ID" spellcheck="false" /></label>
-              <button type="button" class="icon-button col-start-2 row-start-1 mt-6 h-11 w-11 text-red-600 sm:col-start-auto sm:row-start-auto" title="删除模型映射" :aria-label="`删除第 ${index + 1} 条模型映射`" @click="authModelRows.splice(index, 1)"><Trash2 :size="18" /></button>
-            </div>
-            <p v-if="!authModelRows.length" class="py-3 text-center text-sm text-slate-500">未设置模型映射</p>
-            <p class="mt-2 text-xs leading-5 text-slate-500">仅使用该账号的映射，留空表示不添加额外映射；同名映射优先于白名单，后续自动重授权继续使用。</p>
-          </section>
+    <!-- 2FA Rotation Timeline Slide Drawer -->
+    <SlideDrawer
+      v-model:open="drawerOpen"
+      title="2FA 更换与导入进度"
+      :subtitle="inspectedAccount?.email"
+    >
+      <TotpRotationProgress
+        v-if="inspectedAccount"
+        :account="inspectedAccount"
+        :fallback-label="totpRotationLabel(inspectedAccount)"
+      />
+      <template v-if="inspectedAccount" #footer>
+        <div class="flex items-center justify-end gap-2">
+          <button type="button" class="btn btn-sm" @click="drawerOpen = false">关闭</button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            @click="retryFromDrawer(inspectedAccount)"
+          >
+            <Bot :size="14" />
+            <span>重新自动授权</span>
+          </button>
         </div>
+      </template>
+    </SlideDrawer>
 
-        <div v-if="authError" class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ authError }}</div>
-        <div class="dialog-footer flex justify-end gap-2"><button type="button" class="button" @click="authOpen = false">取消</button><button class="button button-primary" :disabled="!authSub2apiName.trim() || authorizing"><LoaderCircle v-if="authorizing" :size="18" class="animate-spin" /><KeyRound v-else-if="authMode === 'rotate_totp'" :size="18" /><Bot v-else :size="18" />{{ authMode === 'rotate_totp' ? '开始更换 2FA' : '开始自动授权' }}</button></div>
-      </form>
-    </ModalDialog>
+    <!-- Modals -->
+    <AccountImportModal v-model:open="importOpen" @imported="handleImported" />
+    <AccountCredentialsModal v-model:open="credentialsOpen" :credentials="credentials" />
+    <AccountAuthModal
+      v-model:open="authOpen"
+      :mode="authMode"
+      :account="authAccount"
+      :defaults="globalSettings?.importDefaults ?? null"
+      :groups="groups"
+      :proxies="proxies"
+      @queued="handleAuthQueued"
+    />
+
+    <!-- Custom Delete Confirmation Dialog -->
+    <ConfirmDialog
+      v-model:open="deleteOpen"
+      title="永久删除账号"
+      :message="`确认永久删除 ${deleteTarget?.email || ''}？`"
+      description="本地账号记录、加密凭据及关联任务历史将被彻底物理删除，且不可恢复。"
+      confirm-label="确认永久删除"
+      danger
+      :loading="deleting"
+      :checkbox-label="deleteTarget?.sub2apiAccountId ? '同时删除 Sub2API 中的对应远端账号' : undefined"
+      :checkbox-value="deleteRemote"
+      @update:checkbox-value="deleteRemote = $event"
+      @confirm="confirmDelete"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Bot, Clock3, Download, Eye, KeyRound, LoaderCircle, Pause, Play, Plus, RefreshCw, ScanSearch, Search, Trash2, Upload, Users } from 'lucide-vue-next'
+import {
+  Bot,
+  Download,
+  Eye,
+  KeyRound,
+  LoaderCircle,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  Users,
+  X
+} from 'lucide-vue-next'
 import { displayHealthStatus, isSchedulingPaused } from '../../shared/account-status'
-import type { AccountImportOverrides, AccountUsageSummary, HealthStatus, ImportDefaults, ManagedAccount, RuntimeSettings } from '../../shared/types'
+import type { AccountUsageSummary, HealthStatus, ManagedAccount, RuntimeSettings } from '../../shared/types'
 import { api } from '../api'
-import ModalDialog from '../components/ModalDialog.vue'
-import NullableNumberField from '../components/NullableNumberField.vue'
-import NumberField from '../components/NumberField.vue'
+import AccountAuthModal from '../components/accounts/AccountAuthModal.vue'
+import AccountCredentialsModal, { type CredentialPayload } from '../components/accounts/AccountCredentialsModal.vue'
+import AccountImportModal from '../components/accounts/AccountImportModal.vue'
+import UsageBento from '../components/accounts/UsageBento.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
+import SlideDrawer from '../components/SlideDrawer.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import TotpRotationProgress from '../components/TotpRotationProgress.vue'
+import { showToast } from '../composables/useToast'
+
+const statusFilterPills: ReadonlyArray<{ value: HealthStatus | ''; label: string }> = [
+  { value: '', label: '全部状态' },
+  { value: 'healthy', label: '健康' },
+  { value: 'rate_limited', label: '限流' },
+  { value: 'degraded', label: '异常' },
+  { value: 'invalid_credentials', label: '凭据失效' },
+  { value: 'upstream_blocked', label: '上游阻止' },
+  { value: 'network_error', label: '网络错误' },
+  { value: 'unknown', label: '未知' }
+]
 
 const accounts = ref<ManagedAccount[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
-const healthStatusFilter = ref<HealthStatus | ''>('')
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
-const pageStart = computed(() => total.value ? (page.value - 1) * pageSize.value + 1 : 0)
-const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
-const usageSummary = ref<AccountUsageSummary | null>(null)
-const usageWindows = computed(() => {
-  const summary = usageSummary.value
-  return summary ? [
-    { label: '5 小时窗口', ...summary.fiveHour },
-    { label: '7 天窗口', ...summary.sevenDay }
-  ] : []
-})
-const availability = computed(() => usageSummary.value?.availability ?? null)
-const availabilityWindowLabel = computed(() => availability.value?.limitingWindow === 'five_hour' ? '5 小时窗口' : availability.value?.limitingWindow === 'seven_day' ? '7 天窗口' : '等待数据')
-const availabilityPrimaryLabel = computed(() => {
-  const estimate = availability.value
-  if (!estimate || estimate.status === 'insufficient_data' || estimate.remainingSeconds === null) return '样本不足'
-  const duration = formatDuration(estimate.remainingSeconds)
-  return estimate.status === 'exhausts_before_reset' ? `约 ${duration}` : `至少 ${duration}`
-})
-const availabilityDetail = computed(() => {
-  const estimate = availability.value
-  if (!estimate || estimate.status === 'insufficient_data') return '等待用量窗口返回重置时间和足够的运行样本。'
-  if (estimate.status === 'exhausts_before_reset') return `${availabilityWindowLabel.value}按当前平均消耗速度预计会先达到 100%。`
-  return `${availabilityWindowLabel.value}将在此后重置，按当前平均速度不会提前耗尽。`
-})
-const availabilityRateLabel = computed(() => {
-  const estimate = availability.value
-  if (!estimate || estimate.status === 'insufficient_data' || estimate.consumptionRatePercentPerHour === null) return '暂时无法计算消耗速度'
-  if (estimate.consumptionRatePercentPerHour === 0) return `当前未检测到消耗 · 样本 ${estimate.sampleCount} 个账号`
-  return `平均消耗 ${Number(estimate.consumptionRatePercentPerHour.toFixed(1))}%/小时 · 样本 ${estimate.sampleCount} 个账号`
-})
-const selectedIds = ref<string[]>([])
-const allSelected = computed(() => accounts.value.length > 0 && accounts.value.every((account) => selectedIds.value.includes(account.id)))
-const loading = ref(false)
-const importing = ref(false)
-const authorizing = ref(false)
-const changingSchedulingIds = ref(new Set<string>())
 const search = ref('')
+const healthStatusFilter = ref<HealthStatus | ''>('')
+const usageSummary = ref<AccountUsageSummary | null>(null)
+const selectedIds = ref<string[]>([])
+const loading = ref(false)
+const changingSchedulingIds = ref(new Set<string>())
+
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const pageStart = computed(() => (total.value ? (page.value - 1) * pageSize.value + 1 : 0))
+const pageEnd = computed(() => Math.min(page.value * pageSize.value, total.value))
 const hasListFilter = computed(() => Boolean(search.value.trim() || healthStatusFilter.value))
-const error = ref('')
-const message = ref('')
+const allSelected = computed(
+  () => accounts.value.length > 0 && accounts.value.every((account) => selectedIds.value.includes(account.id))
+)
+
+// Modals & Drawer State
 const importOpen = ref(false)
-const importError = ref('')
-const credentialText = ref('')
-const previewRows = ref<Array<Record<string, unknown>>>([])
-const validCount = computed(() => previewRows.value.filter((row) => row.status === 'valid').length)
 const credentialsOpen = ref(false)
-const credentials = ref<{ email: string; password: string; totpSecret: string } | null>(null)
+const credentials = ref<CredentialPayload | null>(null)
 watch(credentialsOpen, (open) => {
   if (!open) credentials.value = null
 })
+
 const authOpen = ref(false)
 const authMode = ref<'authorize' | 'rotate_totp'>('authorize')
-const authAccountId = ref('')
-const authSub2apiName = ref('')
-const authError = ref('')
-const authUseGlobal = ref(true)
-const authModelWhitelistText = ref('')
-const authModelRows = ref<Array<{ source: string; target: string }>>([])
+const authAccount = ref<ManagedAccount | null>(null)
+
+const drawerOpen = ref(false)
+const inspectedAccountId = ref<string | null>(null)
+const inspectedAccount = computed(
+  () => accounts.value.find((item) => item.id === inspectedAccountId.value) ?? null
+)
+
+const deleteOpen = ref(false)
+const deleteTarget = ref<ManagedAccount | null>(null)
+const deleteRemote = ref(false)
+const deleting = ref(false)
+
+// Cached Metadata for Auth Modal
 const globalSettings = ref<RuntimeSettings | null>(null)
 const groups = ref<Array<{ id: number; name: string }>>([])
 const proxies = ref<Array<{ id: number; name: string; account_count?: number; latency_ms?: number }>>([])
 let groupsMetadataLoaded = false
 let proxiesMetadataLoaded = false
 let authorizationMetadataRequest: Promise<void> | null = null
-const authOverrides = ref<AccountImportOverrides>({
-  modelWhitelist: [], modelMapping: {}, concurrency: 3, priority: 50, groupIds: [], loadFactor: null,
-  autoPauseOnExpired: true, proxyPolicy: 'auto', fixedProxyId: null
-})
+
 let searchTimer: number | undefined
 let statusPollTimer: number | undefined
 let listRequestId = 0
-const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void pollStatuses() }
 
-function formatTime(value: string | null) { return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '-' }
+const refreshWhenVisible = () => {
+  if (document.visibilityState === 'visible') void pollStatuses()
+}
+
+function formatTime(value: string | null) {
+  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—'
+}
+
 function shortError(value: string): string {
   let summary = value.trim()
   try {
     const parsed = JSON.parse(summary) as Record<string, unknown>
-    const message = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : ''
+    const msg = typeof parsed.message === 'string' ? parsed.message : typeof parsed.error === 'string' ? parsed.error : ''
     const status = typeof parsed.status === 'number' ? `HTTP ${parsed.status}：` : ''
-    if (message) summary = `${status}${message}`
+    if (msg) summary = `${status}${msg}`
   } catch {
     summary = summary.replace(/\s+/g, ' ')
   }
-  return summary.length > 58 ? `${summary.slice(0, 58)}…` : summary
+  return summary.length > 48 ? `${summary.slice(0, 48)}…` : summary
 }
-function usageWidth(value: number | null): string { return `${Math.min(Math.max(value ?? 0, 0), 100)}%` }
-function usageLabel(value: number | null): string { return value === null ? '-' : `${Math.round(value)}%` }
-function averageUsageLabel(value: number | null): string { return value === null ? '-' : `${Number(value.toFixed(1))}%` }
-function formatDuration(value: number): string {
-  const totalMinutes = Math.max(0, Math.round(value / 60))
-  if (totalMinutes < 1) return '不足 1 分钟'
-  const days = Math.floor(totalMinutes / (24 * 60))
-  const hours = Math.floor((totalMinutes % (24 * 60)) / 60)
-  const minutes = totalMinutes % 60
-  if (days) return `${days} 天${hours ? ` ${hours} 小时` : ''}`
-  if (hours) return `${hours} 小时${minutes ? ` ${minutes} 分钟` : ''}`
-  return `${minutes} 分钟`
+
+function usageItems(account: ManagedAccount) {
+  return [
+    { label: '5h', value: account.usageFiveHourPercent },
+    { label: '7d', value: account.usageSevenDayPercent }
+  ]
 }
+
+function usageWidth(value: number | null): string {
+  return `${Math.min(Math.max(value ?? 0, 0), 100)}%`
+}
+
+function usageLabel(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value)}%`
+}
+
+function usageBarColor(value: number | null): string {
+  if (value === null) return 'var(--border-strong)'
+  if (value >= 90) return 'var(--status-danger)'
+  if (value >= 70) return 'var(--status-warn)'
+  return 'var(--accent)'
+}
+
 function authorizationResult(account: ManagedAccount) {
   const code = account.lastAuthorizationErrorCode
   const errorDetail = account.lastAuthorizationErrorSummary || '授权失败，未返回详细原因'
   if (account.lastAuthorizationStatus === 'failed') {
-    return { label: '失败', detail: errorDetail, title: code ? `${code}: ${errorDetail}` : errorDetail, tone: 'text-red-700' }
+    return {
+      label: '失败',
+      detail: errorDetail,
+      title: code ? `${code}: ${errorDetail}` : errorDetail,
+      color: 'var(--status-danger)'
+    }
   }
   if (account.lastAuthorizationStatus === 'pending' || account.lastAuthorizationStatus === 'running') {
-    const detail = account.lastAuthorizationStatus === 'pending' ? '等待后台执行' : '后台正在执行自动授权'
-    return { label: '进行中', detail, title: detail, tone: 'text-blue-700' }
+    const detail = account.lastAuthorizationStatus === 'pending' ? '等待后台执行' : '正在执行自动授权'
+    return { label: '进行中', detail, title: detail, color: 'var(--status-info)' }
   }
   if (account.lastAuthorizationStatus === 'completed' || account.lastAuthAt) {
-    const detail = `完成时间：${formatTime(account.lastAuthAt || account.lastAuthorizationAt)}`
-    return { label: '成功', detail, title: detail, tone: 'text-emerald-700' }
+    const detail = formatTime(account.lastAuthAt || account.lastAuthorizationAt)
+    return { label: '已授权', detail, title: `完成时间：${detail}`, color: 'var(--status-ok)' }
   }
-  return { label: '未执行', detail: '尚无授权记录', title: '尚无授权记录', tone: 'text-slate-600' }
+  return { label: '未执行', detail: '尚无记录', title: '尚无授权记录', color: 'var(--text-muted)' }
 }
-function setResult(text: string, isError = false) { error.value = isError ? text : ''; message.value = isError ? '' : text }
+
+function totpRotationLabel(account: ManagedAccount): string {
+  if (account.totpRotationStatus === 'pending') return '2FA 更换：等待执行'
+  if (account.totpRotationStatus === 'running') return '2FA 更换：进行中'
+  if (account.totpRotationStatus === 'failed') return `2FA 更换失败：${account.totpRotationError || '请重试'}`
+  return `2FA 已更换：${formatTime(account.totpRotatedAt)}`
+}
+
+function rotationInProgress(account: ManagedAccount): boolean {
+  return (
+    account.totpRotationStatus === 'pending' ||
+    account.totpRotationStatus === 'running' ||
+    (account.totpRotationStep === 'import_sub2api' &&
+      (account.totpRotationImportStatus === 'pending' || account.totpRotationImportStatus === 'running'))
+  )
+}
+
+function schedulingActionLabel(account: ManagedAccount): string {
+  if (!account.sub2apiAccountId) return '授权后可调整调度'
+  if (changingSchedulingIds.value.has(account.id)) return '正在更新调度'
+  return isSchedulingPaused(account) ? '恢复调度' : '暂停调度'
+}
+
 function toggleAll(event: Event) {
   const visibleIds = new Set(accounts.value.map((account) => account.id))
   selectedIds.value = (event.target as HTMLInputElement).checked
     ? [...new Set([...selectedIds.value, ...visibleIds])]
     : selectedIds.value.filter((id) => !visibleIds.has(id))
 }
+
 async function refreshAccounts(showLoading: boolean) {
   const requestId = ++listRequestId
   if (showLoading) loading.value = true
   try {
-    const response = await api.listAccounts({ search: search.value, status: healthStatusFilter.value, page: page.value, pageSize: pageSize.value })
+    const response = await api.listAccounts({
+      search: search.value,
+      status: healthStatusFilter.value,
+      page: page.value,
+      pageSize: pageSize.value
+    })
     if (requestId !== listRequestId) return
     accounts.value = response.items
     total.value = response.total
     page.value = response.page
     usageSummary.value = response.usageSummary
-  } catch (e) {
-    if (showLoading && requestId === listRequestId) setResult(e instanceof Error ? e.message : '加载失败', true)
+  } catch (cause) {
+    if (showLoading && requestId === listRequestId) {
+      showToast(cause instanceof Error ? cause.message : '加载账号列表失败', 'error')
+    }
   } finally {
     if (requestId === listRequestId) loading.value = false
   }
 }
-async function load() { await refreshAccounts(true) }
-function schedulingActionLabel(account: ManagedAccount): string {
-  if (!account.sub2apiAccountId) return '授权后可调整调度'
-  if (changingSchedulingIds.value.has(account.id)) return '正在更新调度'
-  return isSchedulingPaused(account) ? '恢复调度' : '暂停调度'
+
+async function load() {
+  await refreshAccounts(true)
 }
+
+async function pollStatuses() {
+  if (!loading.value) await refreshAccounts(false)
+}
+
+function debouncedLoad() {
+  page.value = 1
+  listRequestId += 1
+  loading.value = true
+  window.clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(load, 250)
+}
+
+function selectHealthFilter(status: HealthStatus | '') {
+  if (healthStatusFilter.value === status) return
+  healthStatusFilter.value = status
+  resetPageAndLoad()
+}
+
+function clearSearch() {
+  search.value = ''
+  resetPageAndLoad()
+}
+
+function resetFilters() {
+  search.value = ''
+  healthStatusFilter.value = ''
+  resetPageAndLoad()
+}
+
+function resetPageAndLoad() {
+  window.clearTimeout(searchTimer)
+  page.value = 1
+  void load()
+}
+
+function changePage(nextPage: number) {
+  if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return
+  page.value = nextPage
+  void load()
+}
+
 async function toggleScheduling(account: ManagedAccount) {
   if (!account.sub2apiAccountId || changingSchedulingIds.value.has(account.id)) return
   const schedulable = isSchedulingPaused(account)
   changingSchedulingIds.value.add(account.id)
   try {
     await api.setAccountSchedulable(account.id, schedulable)
-    setResult(`${account.email} 已${schedulable ? '恢复' : '暂停'}调度`)
+    showToast(`${account.email} 已${schedulable ? '恢复' : '暂停'}调度`, 'success')
     await refreshAccounts(false)
-  } catch (e) {
-    setResult(e instanceof Error ? e.message : '更新调度状态失败', true)
+  } catch (cause) {
+    showToast(cause instanceof Error ? cause.message : '更新调度状态失败', 'error')
   } finally {
     changingSchedulingIds.value.delete(account.id)
   }
 }
-function resetPageAndLoad() { window.clearTimeout(searchTimer); page.value = 1; void load() }
-function changePage(nextPage: number) { if (nextPage < 1 || nextPage > totalPages.value || nextPage === page.value) return; page.value = nextPage; void load() }
+
+async function openCredentials(account: ManagedAccount) {
+  try {
+    credentials.value = await api.viewCredentials(account.id)
+    credentialsOpen.value = true
+  } catch (cause) {
+    showToast(cause instanceof Error ? cause.message : '读取凭据失败', 'error')
+  }
+}
+
 async function loadAuthorizationMetadata() {
   if (globalSettings.value && groupsMetadataLoaded && proxiesMetadataLoaded) return
   if (authorizationMetadataRequest) return authorizationMetadataRequest
@@ -494,19 +843,38 @@ async function loadAuthorizationMetadata() {
     let settingsError: unknown
     const requests: Array<Promise<void>> = []
     if (!globalSettings.value) {
-      requests.push(api.getSettings()
-        .then((configuration) => { globalSettings.value = configuration.value })
-        .catch((cause) => { settingsError = cause }))
+      requests.push(
+        api
+          .getSettings()
+          .then((configuration) => {
+            globalSettings.value = configuration.value
+          })
+          .catch((cause) => {
+            settingsError = cause
+          })
+      )
     }
     if (!groupsMetadataLoaded) {
-      requests.push(api.listGroups()
-        .then((response) => { groups.value = response.items; groupsMetadataLoaded = true })
-        .catch(() => { /* Retry only this resource on the next dialog open. */ }))
+      requests.push(
+        api
+          .listGroups()
+          .then((response) => {
+            groups.value = response.items
+            groupsMetadataLoaded = true
+          })
+          .catch(() => {})
+      )
     }
     if (!proxiesMetadataLoaded) {
-      requests.push(api.listProxies()
-        .then((response) => { proxies.value = response.items; proxiesMetadataLoaded = true })
-        .catch(() => { /* Retry only this resource on the next dialog open. */ }))
+      requests.push(
+        api
+          .listProxies()
+          .then((response) => {
+            proxies.value = response.items
+            proxiesMetadataLoaded = true
+          })
+          .catch(() => {})
+      )
     }
     await Promise.all(requests)
     if (!globalSettings.value) throw settingsError ?? new Error('无法读取全局导入配置')
@@ -518,134 +886,72 @@ async function loadAuthorizationMetadata() {
     authorizationMetadataRequest = null
   }
 }
-async function pollStatuses() { if (!loading.value) await refreshAccounts(false) }
-function debouncedLoad() { page.value = 1; listRequestId += 1; loading.value = true; window.clearTimeout(searchTimer); searchTimer = window.setTimeout(load, 250) }
-function openImport() { credentialText.value = ''; previewRows.value = []; importError.value = ''; importOpen.value = true }
-async function submitImport() {
-  if (importing.value || !credentialText.value.trim()) return
-  const text = credentialText.value
-  importing.value = true
-  importError.value = ''
-  previewRows.value = []
+
+async function openAuthorization(account: ManagedAccount, mode: 'authorize' | 'rotate_totp') {
   try {
-    const preview = await api.previewImport(text)
-    previewRows.value = preview.rows
-    if (!preview.validCount) {
-      importError.value = '没有可导入的账号，请检查格式或重复邮箱'
-      return
-    }
-    const result = await api.importAccounts(text)
-    importOpen.value = false
-    setResult(`已导入 ${result.created.length} 个账号${result.errors.length ? `，${result.errors.length} 行未导入` : ''}`)
-    await load()
-  } catch (e) {
-    importError.value = e instanceof Error ? e.message : '导入失败'
-  } finally {
-    importing.value = false
-  }
-}
-async function openCredentials(account: ManagedAccount) {
-  try {
-    credentials.value = await api.viewCredentials(account.id)
-    credentialsOpen.value = true
-  } catch (e) { setResult(e instanceof Error ? e.message : '读取凭据失败', true) }
-}
-function totpRotationLabel(account: ManagedAccount): string {
-  if (account.totpRotationStatus === 'pending') return '2FA 更换：等待执行'
-  if (account.totpRotationStatus === 'running') return '2FA 更换：进行中'
-  if (account.totpRotationStatus === 'failed') return `2FA 更换失败：${account.totpRotationError || '请重试'}`
-  return `2FA 已更换：${formatTime(account.totpRotatedAt)}`
-}
-function rotationInProgress(account: ManagedAccount): boolean {
-  return account.totpRotationStatus === 'pending' || account.totpRotationStatus === 'running' ||
-    account.totpRotationStep === 'import_sub2api' && (account.totpRotationImportStatus === 'pending' || account.totpRotationImportStatus === 'running')
-}
-async function remove(account: ManagedAccount) { const remote = Boolean(account.sub2apiAccountId) && confirm('同时删除 Sub2API 中的账号？\n选择“取消”将只永久删除工作台记录。'); if (!confirm(`确认永久删除 ${account.email}？\n本地账号、加密凭据及关联记录将被物理删除，且不可恢复。`)) return; try { await api.deleteAccount(account.id, remote); selectedIds.value = selectedIds.value.filter((id) => id !== account.id); setResult('账号已永久删除'); await load() } catch (e) { setResult(e instanceof Error ? e.message : '删除失败', true) } }
-function overridesFromDefaults(defaults: ImportDefaults): AccountImportOverrides {
-  return {
-    modelWhitelist: [...defaults.modelWhitelist], modelMapping: { ...defaults.modelMapping }, concurrency: defaults.concurrency, priority: defaults.priority,
-    groupIds: [...defaults.groupIds], loadFactor: defaults.loadFactor, autoPauseOnExpired: defaults.autoPauseOnExpired,
-    proxyPolicy: defaults.proxyPolicy, fixedProxyId: defaults.fixedProxyId
-  }
-}
-function cloneOverrides(overrides: AccountImportOverrides): AccountImportOverrides {
-  return { ...overrides, modelMapping: { ...overrides.modelMapping }, modelWhitelist: [...overrides.modelWhitelist], groupIds: [...overrides.groupIds] }
-}
-async function openAuthorization(account: ManagedAccount, mode: 'authorize' | 'rotate_totp' = 'authorize') {
-  try {
-    // The page preload and all dialog opens share one cached metadata request.
     await loadAuthorizationMetadata()
-    const defaults = globalSettings.value?.importDefaults
-    if (!defaults) throw new Error('无法读取全局导入配置')
-    const selected = account.importOverrides ? cloneOverrides(account.importOverrides) : overridesFromDefaults(defaults)
-    // Earlier versions saved empty mappings before account mapping defaults were supported.
-    if (!selected.modelMappingConfigured && !Object.keys(selected.modelMapping).length) {
-      selected.modelMapping = { ...defaults.modelMapping }
-    }
-    authAccountId.value = account.id
+    authAccount.value = account
     authMode.value = mode
-    authSub2apiName.value = account.sub2apiAccountName || account.email
-    authUseGlobal.value = false
-    authOverrides.value = selected
-    authModelWhitelistText.value = selected.modelWhitelist.join('\n')
-    authModelRows.value = Object.entries(selected.modelMapping).map(([source, target]) => ({ source, target }))
-    authError.value = ''
     authOpen.value = true
-  } catch (e) {
-    setResult(e instanceof Error ? e.message : '授权配置加载失败', true)
+  } catch (cause) {
+    showToast(cause instanceof Error ? cause.message : '授权配置加载失败', 'error')
   }
 }
-function buildAuthorizationOverrides(): AccountImportOverrides | null {
-  if (authUseGlobal.value) return null
-  const modelWhitelist = authModelWhitelistText.value.split(/[\r\n,]+/).map((modelId) => modelId.trim()).filter(Boolean)
-  if (new Set(modelWhitelist).size !== modelWhitelist.length) throw new Error('模型白名单中存在重复 ID')
-  if (modelWhitelist.some((modelId) => modelId.includes('*'))) throw new Error('模型白名单只允许填写准确的模型 ID')
-  const entries: Array<[string, string]> = []
-  const sources = new Set<string>()
-  for (const row of authModelRows.value) {
-    const source = row.source.trim()
-    const target = row.target.trim()
-    if (!source && !target) continue
-    if (!source) throw new Error('模型映射缺少客户端模型')
-    if (!target) throw new Error(`模型 ${source} 缺少上游模型`)
-    if (sources.has(source)) throw new Error(`模型 ${source} 重复`)
-    sources.add(source)
-    entries.push([source, target])
-  }
-  if (authOverrides.value.proxyPolicy === 'fixed' && !authOverrides.value.fixedProxyId) throw new Error('请选择固定代理')
-  return {
-    ...authOverrides.value,
-    modelWhitelist,
-    modelMapping: Object.fromEntries(entries),
-    modelMappingConfigured: true,
-    groupIds: [...authOverrides.value.groupIds],
-    fixedProxyId: authOverrides.value.proxyPolicy === 'fixed' ? authOverrides.value.fixedProxyId : null
-  }
+
+function openRotationDrawer(account: ManagedAccount) {
+  inspectedAccountId.value = account.id
+  drawerOpen.value = true
 }
-async function queueAuthorization() {
-  const rotating = authMode.value === 'rotate_totp'
-  authorizing.value = true
-  authError.value = ''
+
+function retryFromDrawer(account: ManagedAccount) {
+  drawerOpen.value = false
+  void openAuthorization(account, 'authorize')
+}
+
+function askDelete(account: ManagedAccount) {
+  deleteTarget.value = account
+  deleteRemote.value = false
+  deleteOpen.value = true
+}
+
+async function confirmDelete() {
+  if (!deleteTarget.value || deleting.value) return
+  deleting.value = true
   try {
-    const importOverrides = buildAuthorizationOverrides()
-    if (rotating) await api.rotateTotp(authAccountId.value, authSub2apiName.value.trim(), importOverrides)
-    else await api.autoAuthorize(authAccountId.value, authSub2apiName.value.trim(), importOverrides)
-    authOpen.value = false
-    setResult(rotating
-      ? `2FA 更换任务已开始，${importOverrides ? '已保存账号专属配置' : '使用全局配置'}，完成后自动导入 Sub2API`
-      : importOverrides ? '自动授权任务已开始，已保存账号专属配置' : '自动授权任务已开始，使用全局配置')
+    const target = deleteTarget.value
+    const remote = Boolean(target.sub2apiAccountId) && deleteRemote.value
+    await api.deleteAccount(target.id, remote)
+    selectedIds.value = selectedIds.value.filter((id) => id !== target.id)
+    deleteOpen.value = false
+    showToast(`已永久删除 ${target.email}`, 'success')
     await load()
-  } catch (e) { authError.value = e instanceof Error ? e.message : rotating ? '启动 2FA 更换失败' : '自动授权启动失败' } finally { authorizing.value = false }
+  } catch (cause) {
+    showToast(cause instanceof Error ? cause.message : '删除失败', 'error')
+  } finally {
+    deleting.value = false
+  }
 }
+
+function handleImported(summary: string) {
+  showToast(summary, 'success')
+  void load()
+}
+
+function handleAuthQueued(summary: string) {
+  showToast(summary, 'success')
+  void load()
+}
+
 onMounted(() => {
   void load()
-  void loadAuthorizationMetadata().catch(() => { /* Retry when the authorization dialog opens. */ })
+  void loadAuthorizationMetadata().catch(() => {})
   statusPollTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') void pollStatuses()
   }, 5_000)
   document.addEventListener('visibilitychange', refreshWhenVisible)
   window.addEventListener('focus', refreshWhenVisible)
 })
+
 onUnmounted(() => {
   window.clearTimeout(searchTimer)
   window.clearInterval(statusPollTimer)

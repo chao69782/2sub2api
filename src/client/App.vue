@@ -1,50 +1,77 @@
 <template>
-  <main v-if="!auth.ready" class="login-page flex min-h-screen items-center justify-center px-4 text-slate-900">
-    <div class="login-card w-full max-w-sm">
+  <ToastHost />
+
+  <!-- Session Restore Stage -->
+  <main
+    v-if="!auth.ready"
+    class="ambient-grid relative flex min-h-screen items-center justify-center overflow-hidden bg-canvas px-4 text-ink-primary"
+  >
+    <div
+      class="pointer-events-none absolute -top-32 left-1/2 h-[360px] w-[540px] -translate-x-1/2 rounded-full opacity-25 blur-3xl"
+      style="background: radial-gradient(circle, var(--accent) 0%, transparent 70%)"
+      aria-hidden="true"
+    ></div>
+
+    <div class="surface-card relative z-10 w-full max-w-sm p-7">
       <div class="mb-6 flex items-center gap-3">
-        <div class="brand-mark">OA</div>
-        <h1 class="text-lg font-medium">账号授权工作台</h1>
+        <div class="flex h-10 w-10 items-center justify-center rounded-[11px] bg-accent text-accent-ink shadow-sm">
+          <ShieldCheck :size="20" :stroke-width="2" />
+        </div>
+        <div>
+          <h1 class="text-base font-semibold tracking-tight text-ink-primary">OpenAI 账号授权工作台</h1>
+          <p class="font-mono text-[11px] text-ink-muted">正在验证管理员会话</p>
+        </div>
       </div>
-      <p v-if="auth.restoreError" class="text-sm leading-6 text-slate-700" role="alert">{{ auth.restoreError }}</p>
-      <div v-else class="flex items-center gap-2 text-sm text-slate-600" role="status">
-        <LoaderCircle :size="18" class="shrink-0 motion-safe:animate-spin" aria-hidden="true" />
+
+      <div
+        v-if="auth.restoreError"
+        class="rounded-control border px-3.5 py-3 text-sm leading-6"
+        style="border-color: var(--status-danger-bg); background-color: var(--status-danger-bg); color: var(--status-danger)"
+        role="alert"
+      >
+        {{ auth.restoreError }}
+      </div>
+      <div v-else class="flex items-center gap-2.5 text-sm text-ink-secondary" role="status">
+        <LoaderCircle :size="18" class="shrink-0 text-accent motion-safe:animate-spin" aria-hidden="true" />
         <span>正在恢复登录状态…</span>
       </div>
-      <button v-if="auth.restoreError" type="button" class="button button-primary mt-5 w-full" :disabled="auth.restoring" @click="retryRestore">
-        <RefreshCw :size="18" aria-hidden="true" />重新尝试
+
+      <button
+        v-if="auth.restoreError"
+        type="button"
+        class="btn btn-primary mt-5 w-full"
+        :disabled="auth.restoring"
+        @click="retryRestore"
+      >
+        <RefreshCw :size="16" :class="{ 'animate-spin': auth.restoring }" aria-hidden="true" />
+        重新尝试
       </button>
     </div>
   </main>
+
+  <!-- Login Route -->
   <RouterView v-else-if="route.name === 'login'" />
-  <div v-else class="app-shell min-h-screen text-slate-900">
-    <header class="app-header border-b border-slate-200 bg-white">
-      <div class="app-header-inner">
-        <div class="app-brand">
-          <div class="brand-mark">OA</div>
-          <span class="hidden md:inline">账号授权工作台</span>
-        </div>
-        <nav class="app-navigation" aria-label="主导航">
-          <RouterLink to="/accounts" class="nav-link"><Users :size="18" />账号</RouterLink>
-          <RouterLink to="/settings" class="nav-link"><Settings :size="18" />设置</RouterLink>
-        </nav>
-        <div class="app-user">
-          <span class="hidden sm:inline font-mono">{{ auth.username }}</span>
-          <button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><LogOut :size="18" /></button>
-        </div>
-      </div>
-    </header>
-    <main class="app-content mx-auto max-w-[1600px] px-4 lg:px-8"><RouterView /></main>
-  </div>
+
+  <!-- Authenticated Workbench Shell -->
+  <AppShell v-else :username="auth.username" @logout="logout">
+    <RouterView />
+  </AppShell>
 </template>
 
 <script setup lang="ts">
-import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
-import { LoaderCircle, LogOut, RefreshCw, Settings, Users } from 'lucide-vue-next'
+import { RouterView, useRoute, useRouter } from 'vue-router'
+import { LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-vue-next'
+import AppShell from './components/AppShell.vue'
+import ToastHost from './components/ToastHost.vue'
+import { initTheme } from './composables/useTheme'
 import { useAuthStore } from './stores/auth'
+
+initTheme()
 
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
+
 async function retryRestore() {
   const target = auth.pendingPath || `${window.location.pathname}${window.location.search}${window.location.hash}`
   await auth.restore()
@@ -53,5 +80,9 @@ async function retryRestore() {
   const destination = router.resolve(target)
   await router.replace({ path: destination.path, query: destination.query, hash: destination.hash, force: true })
 }
-async function logout() { await auth.logout(); await router.push('/login') }
+
+async function logout() {
+  await auth.logout()
+  await router.push('/login')
+}
 </script>
